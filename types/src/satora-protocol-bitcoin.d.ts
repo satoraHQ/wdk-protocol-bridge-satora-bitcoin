@@ -28,8 +28,9 @@
  */
 /**
  * @typedef {Object} SatoraBridgeExtra
- * @property {string} sourceChain - The source blockchain (e.g. "bitcoin", "lightning", "arkade").
+ * @property {string} sourceChain - The source blockchain (e.g. "bitcoin", "lightning", "spark", "arkade").
  * @property {string} [sourceToken] - The source token identifier. Defaults to "btc".
+ * @property {boolean} [gasless] - Use gasless relay for claim/funding. Defaults to true for BTC/Lightning → EVM, omitted for Lightning → EVM.
  */
 /**
  * @typedef {Object} SatoraBridgeResult
@@ -264,13 +265,17 @@ export type SatoraProtocolConfig = {
 export type SatoraBridgeOptions = BridgeOptions & SatoraBridgeExtra;
 export type SatoraBridgeExtra = {
     /**
-     * - The source blockchain (e.g. "bitcoin", "lightning", "arkade").
+     * - The source blockchain (e.g. "bitcoin", "lightning", "spark", "arkade").
      */
     sourceChain: string;
     /**
      * - The source token identifier. Defaults to "btc".
      */
     sourceToken?: string;
+    /**
+     * - Use gasless relay for claim/funding. Defaults to true for BTC/Lightning → EVM, omitted for Lightning → EVM.
+     */
+    gasless?: boolean;
 };
 export type SatoraBridgeResult = {
     /**

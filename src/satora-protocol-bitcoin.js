@@ -62,6 +62,7 @@ import {
  * @typedef {Object} SatoraBridgeExtra
  * @property {string} sourceChain - The source blockchain (e.g. "bitcoin", "lightning", "arkade").
  * @property {string} [sourceToken] - The source token identifier. Defaults to "btc".
+ * @property {boolean} [gasless] - Use gasless relay for funding. Only relevant for EVM --> BTC/Lightning Swaps.
  */
 
 /**
@@ -159,7 +160,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const {
       apiKey,
       mnemonic,
-      baseUrl = 'https://api.lendaswap.com/',
+      baseUrl = 'https://api.lendaswap.com',
       esploraUrl = 'https://mempool.space/api',
       walletStorage = new InMemoryWalletStorage(),
       swapStorage = new InMemorySwapStorage()
@@ -180,7 +181,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
   /**
    * Resolves the source Asset from bridge options.
    *
-   * Supports "bitcoin" (on-chain), "lightning", "spark", and "arkade".
+   * Supports "bitcoin" (on-chain), "lightning", and "arkade".
    *
    * @private
    * @param {SatoraBridgeOptions} options
@@ -190,7 +191,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const chain = options.sourceChain.toLowerCase()
     const tokenId = options.sourceToken || 'btc'
 
-    if (chain === 'lightning' || chain === 'spark') return Asset.BTC_LIGHTNING
+    if (chain === 'lightning') return Asset.BTC_LIGHTNING
     if (chain === 'arkade') return Asset.BTC_ARKADE
     if (chain === 'bitcoin') return Asset.BTC_ONCHAIN
 
@@ -200,7 +201,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
   /**
    * Resolves the target Asset from bridge options.
    *
-   * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", "spark", and "arkade".
+   * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", and "arkade".
    *
    * @private
    * @param {SatoraBridgeOptions} options
@@ -210,8 +211,9 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const chain = options.targetChain.toLowerCase()
     const tokenId = options.token
 
-    if (chain === 'lightning' || chain === 'spark') return Asset.BTC_LIGHTNING
+    if (chain === 'lightning') return Asset.BTC_LIGHTNING
     if (chain === 'arkade') return Asset.BTC_ARKADE
+    if (chain === 'bitcoin') return Asset.BTC_ONCHAIN
 
     return { chain: toChain(chain), tokenId }
   }
@@ -280,15 +282,19 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const source = this._resolveSourceAsset(options)
     const target = this._resolveTargetAsset(options)
 
-    const result = await client.createSwap({
+    const swapOptions = {
       source,
       target,
       sourceAmount: Number(options.amount),
       targetAddress: options.recipient,
-      referralCode: /** @type {SatoraProtocolConfig} */ (this._config).referralCode,
-      gasless: true
-    })
+      referralCode: /** @type {SatoraProtocolConfig} */ (this._config).referralCode
+    }
 
+    if (options.gasless !== undefined) {
+      swapOptions.gasless = options.gasless
+    }
+
+    const result = await client.createSwap(swapOptions)
     const response = result.response
 
     return {
@@ -296,7 +302,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
       fee: BigInt(response.fee_sats || 0),
       bridgeFee: BigInt(response.fee_sats || 0),
       depositAddress: response.btc_htlc_address || undefined,
-      lightningInvoice: response.lightning_invoice || undefined,
+      lightningInvoice: response.bolt11_invoice || response.lightning_invoice || undefined,
       evmHtlcAddress: response.evm_htlc_address || undefined,
       depositAmount: BigInt(response.source_amount),
       targetAmount: response.target_amount
