@@ -100,7 +100,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     /**
      * Resolves the source Asset from bridge options.
      *
-     * Supports "bitcoin" (on-chain), "lightning", and "arkade". Defaults to Bitcoin on-chain.
+     * Supports "bitcoin" (on-chain), "lightning", "spark", and "arkade".
      *
      * @private
      * @param {SatoraBridgeOptions} options
@@ -110,8 +110,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     /**
      * Resolves the target Asset from bridge options.
      *
-     * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", and "arkade".
-     * Defaults to USDT on Arbitrum.
+     * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", "spark", and "arkade".
      *
      * @private
      * @param {SatoraBridgeOptions} options

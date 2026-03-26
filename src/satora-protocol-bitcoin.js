@@ -180,7 +180,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
   /**
    * Resolves the source Asset from bridge options.
    *
-   * Supports "bitcoin" (on-chain), "lightning", and "arkade". Defaults to Bitcoin on-chain.
+   * Supports "bitcoin" (on-chain), "lightning", "spark", and "arkade".
    *
    * @private
    * @param {SatoraBridgeOptions} options
@@ -190,7 +190,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const chain = options.sourceChain.toLowerCase()
     const tokenId = options.sourceToken || 'btc'
 
-    if (chain === 'lightning') return Asset.BTC_LIGHTNING
+    if (chain === 'lightning' || chain === 'spark') return Asset.BTC_LIGHTNING
     if (chain === 'arkade') return Asset.BTC_ARKADE
     if (chain === 'bitcoin') return Asset.BTC_ONCHAIN
 
@@ -200,8 +200,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
   /**
    * Resolves the target Asset from bridge options.
    *
-   * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", and "arkade".
-   * Defaults to USDT on Arbitrum.
+   * Supports EVM chains (arbitrum, ethereum, polygon, etc.), "lightning", "spark", and "arkade".
    *
    * @private
    * @param {SatoraBridgeOptions} options
@@ -211,7 +210,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     const chain = options.targetChain.toLowerCase()
     const tokenId = options.token
 
-    if (chain === 'lightning') return Asset.BTC_LIGHTNING
+    if (chain === 'lightning' || chain === 'spark') return Asset.BTC_LIGHTNING
     if (chain === 'arkade') return Asset.BTC_ARKADE
 
     return { chain: toChain(chain), tokenId }

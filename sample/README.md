@@ -54,12 +54,17 @@ Bridge between chains via the Satora protocol. Specify source and target as `cha
 # BTC → USDT on Arbitrum (send 0.001 BTC)
 npm run cli -- swap --source bitcoin:btc --target arbitrum:usdt --source-amount 0.001
 
-# USDT → BTC (send 10 USDT)
-npm run cli -- swap --source arbitrum:usdt --target bitcoin:btc --source-amount 10
+# Spark → USDT on Arbitrum (send 0.001 BTC via Lightning)
+npm run cli -- swap --source spark:btc --target arbitrum:usdt --source-amount 0.001
 
-# USDT → BTC (receive exactly 0.001 BTC)
+# USDT → Spark (send 10 USDT, receive BTC on Spark via Lightning)
+npm run cli -- swap --source arbitrum:usdt --target spark:btc --source-amount 10
+
+# USDT → BTC on-chain (receive exactly 0.001 BTC)
 npm run cli -- swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001
 ```
+
+Spark swaps use Lightning under the hood — the CLI automatically creates/pays Lightning invoices via the Spark wallet.
 
 ### Supported chains and assets
 
@@ -67,6 +72,7 @@ npm run cli -- swap --source arbitrum:usdt --target bitcoin:btc --target-amount 
 |------------|--------|-------------------------|
 | `bitcoin`  | `btc`  | —                       |
 | `arbitrum` | `eth`  | `usdt`, `usdt0`, `usdc` |
+| `spark`    | `btc`  | —                       |
 
 ### Seed phrase
 

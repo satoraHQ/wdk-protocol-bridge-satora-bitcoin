@@ -2,6 +2,7 @@ import WDK from '@tetherto/wdk'
 import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
+import WalletManagerSpark from '@tetherto/wdk-wallet-spark'
 import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
 import type { SatoraProtocolConfig, SatoraBridgeOptions } from '@satora/wdk-protocol-bridge-satora-bitcoin'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
@@ -15,12 +16,13 @@ import { homedir } from 'os'
 const SEED_FILE = join(homedir(), '.wdk-cli-seed')
 const POLL_INTERVAL_MS = 10_000
 
-const SUPPORTED_CHAINS = ['bitcoin', 'arbitrum'] as const
+const SUPPORTED_CHAINS = ['bitcoin', 'arbitrum', 'spark'] as const
 type ChainName = typeof SUPPORTED_CHAINS[number]
 
 const NATIVE: Record<ChainName, { symbol: string; decimals: number }> = {
   bitcoin: { symbol: 'btc', decimals: 8 },
-  arbitrum: { symbol: 'eth', decimals: 18 }
+  arbitrum: { symbol: 'eth', decimals: 18 },
+  spark: { symbol: 'btc', decimals: 8 }
 }
 
 const TOKENS: Record<string, Record<string, { address: string; decimals: number }>> = {
@@ -58,10 +60,14 @@ async function initWdk (seed: string) {
     .registerWallet('arbitrum', WalletManagerEvm, {
       provider: 'https://arb1.arbitrum.io/rpc'
     })
+    .registerWallet('spark', WalletManagerSpark as any, {
+      network: 'MAINNET'
+    })
 
   const accounts: Record<ChainName, IWalletAccountWithProtocols> = {
     bitcoin: await wdk.getAccount('bitcoin', 0),
-    arbitrum: await wdk.getAccount('arbitrum', 0)
+    arbitrum: await wdk.getAccount('arbitrum', 0),
+    spark: await wdk.getAccount('spark', 0)
   }
 
   return { wdk, accounts }
@@ -114,14 +120,19 @@ function getDecimals (chain: ChainName, tokenKey: string): number {
   return TOKENS[chain]?.[tokenKey]?.decimals ?? NATIVE[chain].decimals
 }
 
-/** Resolve a token key to its contract address (or 'btc' for bitcoin). */
+/** Resolve a token key to its contract address (or 'btc' for bitcoin/spark). */
 function getTokenAddress (chain: ChainName, tokenKey: string): string {
-  if (chain === 'bitcoin' && tokenKey === 'btc') return 'btc'
+  if ((chain === 'bitcoin' || chain === 'spark') && tokenKey === 'btc') return 'btc'
   const info = TOKENS[chain]?.[tokenKey]
   if (!info) {
     throw new Error(`Unknown token "${tokenKey}" on ${chain}. Known: ${Object.keys(TOKENS[chain] || {}).join(', ') || NATIVE[chain].symbol}`)
   }
   return info.address
+}
+
+/** Check if the account has Spark Lightning methods. */
+function isSparkAccount (account: any): account is { createLightningInvoice: Function; payLightningInvoice: Function } {
+  return typeof account.createLightningInvoice === 'function'
 }
 
 // ---------------------------------------------------------------------------
@@ -147,9 +158,19 @@ async function cmdBalance (accounts: Record<ChainName, IWalletAccountWithProtoco
   }
 }
 
-async function cmdReceive (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName) {
-  const address = await accounts[chain].getAddress()
+async function cmdReceive (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, amount?: string) {
+  const account = accounts[chain]
+  const address = await account.getAddress()
   console.log(`${chain}: ${address}`)
+
+  if (chain === 'spark' && amount) {
+    const sats = Number(amount)
+    const sparkAccount = account as any
+    const result = await sparkAccount.createLightningInvoice({ amountSats: sats })
+    console.log()
+    console.log(`Lightning invoice (${sats} sats):`)
+    console.log(result.invoice?.encodedInvoice ?? result.encodedInvoice ?? JSON.stringify(result, null, 2))
+  }
 }
 
 async function cmdSend (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, to: string, amount: string, feeRate?: string) {
@@ -199,7 +220,20 @@ async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>
   const targetAmount = flags['target-amount'] ? Number(parseUnits(flags['target-amount'], tgtDecimals)) : undefined
   const amount = sourceAmount ?? targetAmount!
 
-  const recipientAddress = await accounts[tgt.chain].getAddress()
+  // For Spark targets, create a Lightning invoice so the swap pays into Spark
+  let recipientAddress: string
+  if (tgt.chain === 'spark' && targetAmount) {
+    const sparkAccount = accounts.spark as any
+    const invoice = await sparkAccount.createLightningInvoice({ amountSats: targetAmount })
+    recipientAddress = invoice.invoice
+    console.log(`Created Lightning invoice for ${targetAmount} sats`)
+  } else if (tgt.chain === 'spark' && sourceAmount) {
+    // We don't know the exact target amount yet — use the source address as placeholder.
+    // The swap will use sourceAmount and the server determines the target.
+    recipientAddress = await accounts[tgt.chain].getAddress()
+  } else {
+    recipientAddress = await accounts[tgt.chain].getAddress()
+  }
 
   const bridgeOptions: SatoraBridgeOptions = {
     sourceChain: src.chain,
@@ -239,7 +273,8 @@ async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>
     }
   } else if (sourceAmount) {
     const balance = await account.getBalance()
-    const estimatedTxFee = BigInt(300)
+    // Spark has zero fees; Bitcoin needs ~300 sats for a 1-in 1-out tx
+    const estimatedTxFee = src.chain === 'spark' ? BigInt(0) : BigInt(300)
     const totalRequired = BigInt(sourceAmount) + estimatedTxFee
     console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
     if (balance < totalRequired) {
@@ -276,7 +311,19 @@ async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>
     console.log(`Funded: ${txHash}`)
   } else if (bridge.lightningInvoice) {
     console.log(`Invoice  : ${bridge.lightningInvoice}`)
-    console.log('\nPay this Lightning invoice to fund the swap.')
+
+    if (src.chain === 'spark') {
+      console.log()
+      console.log('Paying Lightning invoice via Spark...')
+      const sparkAccount = accounts.spark as any
+      const payment = await sparkAccount.payLightningInvoice({
+        invoice: bridge.lightningInvoice,
+        maxFeeSats: 1000
+      })
+      console.log(`Paid: ${payment.id}`)
+    } else {
+      console.log('\nPay this Lightning invoice to fund the swap.')
+    }
   }
 
   // Poll
@@ -309,7 +356,7 @@ function printUsage () {
   console.log(`Usage:
   cli balance <chain> <asset>              Check balance
   cli send <chain> <to> <amount> [feeRate] Send native asset
-  cli receive <chain>                      Show receive address
+  cli receive <chain> [sats]                Show address (+ Lightning invoice for Spark)
   cli swap --source <chain:token> --target <chain:token> --source-amount <n> | --target-amount <n>
 
 Chains: ${SUPPORTED_CHAINS.join(', ')}
@@ -317,12 +364,15 @@ Assets: btc, eth, usdt, usdt0, usdc
 
 Examples:
   cli balance bitcoin btc
+  cli balance spark btc
   cli balance arbitrum usdt0
   cli send bitcoin bc1q... 0.001 2
-  cli receive arbitrum
+  cli receive spark
+  cli receive spark 10000
   cli swap --source bitcoin:btc --target arbitrum:usdt --source-amount 0.001
-  cli swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001
-  cli swap --source arbitrum:usdt --target bitcoin:btc --source-amount 10`)
+  cli swap --source spark:btc --target arbitrum:usdt --source-amount 0.001
+  cli swap --source arbitrum:usdt --target spark:btc --source-amount 10
+  cli swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001`)
 }
 
 // ---------------------------------------------------------------------------
@@ -349,9 +399,9 @@ async function main () {
         break
       }
       case 'receive': {
-        if (args.length < 1) throw new Error('Usage: cli receive <chain>')
+        if (args.length < 1) throw new Error('Usage: cli receive <chain> [amount]')
         const chain = resolveChain(args[0])
-        await cmdReceive(accounts, chain)
+        await cmdReceive(accounts, chain, args[1])
         break
       }
       case 'send': {
