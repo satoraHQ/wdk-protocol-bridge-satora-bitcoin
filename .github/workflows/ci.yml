@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Standard lint (JS)
+        run: npm run lint
+
+      - name: Build types
+        run: npm run build:types
+
+      - name: Biome check (TS)
+        run: npx biome check .
+
+  sample:
+    name: Sample typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: sample/package-lock.json
+
+      - run: npm ci
+
+      - name: Install sample deps
+        working-directory: sample
+        run: npm ci
+
+      - name: Typecheck sample
+        working-directory: sample
+        run: npx tsc --noEmit
