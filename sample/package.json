@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx index.ts",
+    "cli": "tsx cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -9,5 +9,5 @@
     "rootDir": ".",
     "skipLibCheck": true
   },
-  "include": ["index.ts"]
+  "include": ["index.ts", "cli.ts"]
 }

@@ -1,14 +1,7 @@
 # Satora Bridge Sample
 
-Bridge Bitcoin to USDT on Arbitrum using WDK with the Satora bridge protocol.
-
-## What this does
-
-1. Creates a WDK instance with both a **Bitcoin wallet** and an **EVM (Arbitrum) wallet** from a single seed phrase
-2. Registers the **Satora bridge protocol** on the Bitcoin wallet
-3. Gets a quote for bridging BTC → USDT
-4. Creates a swap and prints deposit instructions (a Bitcoin HTLC address)
-5. Polls for swap completion, then claims the USDT on Arbitrum (gasless via Gelato)
+A CLI wallet and bridge demo using WDK with the Satora bridge protocol. Manages Bitcoin and Arbitrum wallets from a
+single seed phrase.
 
 ## Setup
 
@@ -16,33 +9,82 @@ Bridge Bitcoin to USDT on Arbitrum using WDK with the Satora bridge protocol.
 npm install
 ```
 
-## Run
+## CLI
 
 ```bash
-# Generate a fresh wallet
+npm run cli -- <command> [args]
+```
+
+### Commands
+
+#### `balance <chain> <asset>`
+
+Check the balance of a native asset or token.
+
+```bash
+npm run cli -- balance bitcoin btc
+npm run cli -- balance arbitrum eth
+npm run cli -- balance arbitrum usdt0
+```
+
+#### `receive <chain>`
+
+Show the receive address for a chain.
+
+```bash
+npm run cli -- receive bitcoin
+npm run cli -- receive arbitrum
+```
+
+#### `send <chain> <to> <amount> [feeRate]`
+
+Send native assets. Amount is in human-readable units (BTC, not sats). The optional `feeRate` is in sat/vB for Bitcoin.
+
+```bash
+npm run cli -- send bitcoin bc1q... 0.001 2
+npm run cli -- send arbitrum 0x... 0.01
+```
+
+### Supported chains and assets
+
+| Chain      | Native | Tokens                  |
+|------------|--------|-------------------------|
+| `bitcoin`  | `btc`  | —                       |
+| `arbitrum` | `eth`  | `usdt`, `usdt0`, `usdc` |
+
+### Seed phrase
+
+The CLI loads the seed phrase from (in order):
+
+1. `SEED_PHRASE` environment variable
+2. `~/.wdk-cli-seed` file
+3. Generates a new one and saves to `~/.wdk-cli-seed`
+
+```bash
+# Use a specific seed
+SEED_PHRASE="your twelve word seed phrase ..." npm run cli -- balance bitcoin btc
+```
+
+## Bridge script
+
+The `index.ts` script runs a full end-to-end bridge flow (BTC on-chain to USDT on Arbitrum):
+
+```bash
 npm start
-
-# Or restore from an existing seed phrase
-SEED_PHRASE="your twelve word seed phrase here ..." npm start
-
-# Customize the bridge amount (in satoshis, default: 100000)
-BRIDGE_AMOUNT=200000 npm start
 ```
 
-## Configuration
+It will:
 
-All configuration is optional. Edit `index.ts` or set environment variables:
+1. Initialize both wallets from a seed phrase
+2. Quote the bridge
+3. Check the BTC balance
+4. Create a swap and fund the deposit address
+5. Poll until the server funds the EVM side
+6. Claim the USDT on Arbitrum (gasless)
 
-| Env Variable       | Description                           | Default                          |
-|--------------------|---------------------------------------|----------------------------------|
-| `SEED_PHRASE`      | BIP39 seed phrase for both wallets    | Randomly generated               |
-| `BRIDGE_AMOUNT`    | Amount to bridge in satoshis          | `100000` (0.001 BTC)            |
-| `SATORA_API_KEY`   | Lendaswap API key                     | None                             |
+### Bridge configuration
 
-## Bridge Lifecycle
-
-```
-bridge()  →  Send BTC to deposit address  →  Poll getSwap()  →  claim()  →  USDT received
-                                                                    OR
-                                                               refund() on timeout
-```
+| Env Variable    | Description                        | Default            |
+|-----------------|------------------------------------|--------------------|
+| `SEED_PHRASE`   | BIP39 seed phrase for both wallets | Randomly generated |
+| `BRIDGE_AMOUNT` | Amount to bridge in satoshis       | `10000`            |
