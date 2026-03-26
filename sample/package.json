@@ -1,0 +1,20 @@
+{
+  "name": "satora-bridge-sample",
+  "version": "1.0.0",
+  "description": "Sample: Bridge Bitcoin to USDT on Arbitrum using WDK + Satora protocol",
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tetherto/wdk": "^1.0.0-beta.6",
+    "@tetherto/wdk-wallet-btc": "^1.0.0-beta.7",
+    "@tetherto/wdk-wallet-evm": "^1.0.0-beta.10",
+    "@satora/wdk-protocol-bridge-satora-bitcoin": "file:.."
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.2"
+  }
+}
