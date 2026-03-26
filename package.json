@@ -16,6 +16,7 @@
     "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage"
   },
   "dependencies": {
+    "@lendasat/lendaswap-sdk-pure": "^0.2.11",
     "@tetherto/wdk-wallet": "^1.0.0-beta.1",
     "bare-node-runtime": "^1.1.4"
   },
@@ -31,6 +32,10 @@
       "bare": "./bare.js",
       "default": "./index.js"
     },
+    "./storage": {
+      "types": "./types/storage.d.ts",
+      "default": "./storage.js"
+    },
     "./package": {
       "default": "./package.json"
     }
@@ -38,7 +43,8 @@
   "standard": {
     "ignore": [
       "bare.js",
-      "tests/**/*.js"
+      "tests/**/*.js",
+      "sample/**"
     ]
   }
 }
