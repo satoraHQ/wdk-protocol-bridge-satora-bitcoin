@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "./types",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "target": "es2022",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["index.js", "storage.js", "src/**/*.js"],
+  "exclude": ["node_modules", "tests", "bare.js"]
+}

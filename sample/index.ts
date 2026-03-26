@@ -10,16 +10,16 @@
  * 6. Polling for swap completion and claiming the USDT
  */
 
-import WDK from '@tetherto/wdk'
+import type {
+  SatoraBridgeOptions,
+  SatoraBridgeResult,
+  SatoraProtocolConfig,
+} from '@satora/wdk-protocol-bridge-satora-bitcoin'
+import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
 import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
+import WDK from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
-import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
-import type {
-  SatoraProtocolConfig,
-  SatoraBridgeResult,
-  SatoraBridgeOptions
-} from '@satora/wdk-protocol-bridge-satora-bitcoin'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -48,7 +48,7 @@ const POLL_INTERVAL_MS = 10_000
 // Main
 // ---------------------------------------------------------------------------
 
-async function main (): Promise<void> {
+async function main(): Promise<void> {
   console.log('=== Satora Bridge Sample ===\n')
 
   // --- 1. Initialize WDK with Bitcoin + EVM wallets ---
@@ -58,10 +58,10 @@ async function main (): Promise<void> {
 
   const wdk = new WDK(seedPhrase)
     .registerWallet('bitcoin', WalletManagerBtc as any, {
-      client: { type: 'electrum', clientConfig: { host: 'blockstream.info', port: 700, protocol: 'ssl' } }
+      client: { type: 'electrum', clientConfig: { host: 'blockstream.info', port: 700, protocol: 'ssl' } },
     })
     .registerWallet('arbitrum', WalletManagerEvm, {
-      provider: 'https://arb1.arbitrum.io/rpc'
+      provider: 'https://arb1.arbitrum.io/rpc',
     })
 
   // --- 2. Get accounts ---
@@ -92,7 +92,7 @@ async function main (): Promise<void> {
     amount: BRIDGE_AMOUNT_SATS,
     recipient: evmAddress,
     targetChain: 'arbitrum',
-    token: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9' // USDT on Arbitrum
+    token: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', // USDT on Arbitrum
   }
 
   const quote = await satora.quoteBridge(bridgeOptions)
@@ -113,7 +113,11 @@ async function main (): Promise<void> {
   const estimatedTxFee = BigInt(300)
   const totalRequired = BigInt(BRIDGE_AMOUNT_SATS) + estimatedTxFee
   console.log('BTC balance     :', btcBalance.toString(), 'sats')
-  console.log('Total required  :', totalRequired.toString(), `sats (${BRIDGE_AMOUNT_SATS} deposit + ~${estimatedTxFee.toString()} on-chain fee)`)
+  console.log(
+    'Total required  :',
+    totalRequired.toString(),
+    `sats (${BRIDGE_AMOUNT_SATS} deposit + ~${estimatedTxFee.toString()} on-chain fee)`,
+  )
 
   if (btcBalance < totalRequired) {
     console.log(`\nInsufficient balance. Need ~${totalRequired.toString()} sats, have ${btcBalance.toString()}.`)
@@ -146,7 +150,7 @@ async function main (): Promise<void> {
 
   const fundingTx = await btcAccount.sendTransaction({
     to: bridge.depositAddress,
-    value: Number(bridge.depositAmount)
+    value: Number(bridge.depositAmount),
   })
 
   console.log('Funding TX broadcast!')
@@ -184,11 +188,11 @@ async function main (): Promise<void> {
   console.log('Done! USDT should now be in your EVM wallet:', evmAddress)
 }
 
-function sleep (ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('Error:', err)
   process.exit(1)
 })

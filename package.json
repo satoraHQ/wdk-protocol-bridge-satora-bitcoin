@@ -13,7 +13,10 @@
     "lint": "standard",
     "lint:fix": "standard --fix",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage"
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "check:fix": "biome check --fix --unsafe ."
   },
   "dependencies": {
     "@lendasat/lendaswap-sdk-pure": "^0.2.11",
@@ -21,6 +24,7 @@
     "bare-node-runtime": "^1.1.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
     "cross-env": "^7.0.3",
     "jest": "^29.7.0",
     "standard": "^17.1.2",

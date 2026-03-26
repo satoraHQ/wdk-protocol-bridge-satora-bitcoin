@@ -1,15 +1,15 @@
-import WDK from '@tetherto/wdk'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { isBtcOnchain, isEvmToken, isLightning } from '@lendasat/lendaswap-sdk-pure'
+import { sqliteStorageFactory } from '@lendasat/lendaswap-sdk-pure/node'
+import type { SatoraBridgeOptions, SatoraProtocolConfig } from '@satora/wdk-protocol-bridge-satora-bitcoin'
+import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
 import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
+import WDK from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
 import WalletManagerSpark from '@tetherto/wdk-wallet-spark'
-import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
-import type { SatoraProtocolConfig, SatoraBridgeOptions } from '@satora/wdk-protocol-bridge-satora-bitcoin'
-import { sqliteStorageFactory } from '@lendasat/lendaswap-sdk-pure/node'
-import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { join } from 'path'
-import { homedir } from 'os'
-import {isBtcOnchain, isEvmToken, isLightning} from "@lendasat/lendaswap-sdk-pure";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -20,28 +20,28 @@ const DB_FILE = join(homedir(), '.wdk-cli-swaps.db')
 const POLL_INTERVAL_MS = 1_000
 
 const SUPPORTED_CHAINS = ['Bitcoin', 'Arbitrum', 'Spark', 'Lightning'] as const
-type ChainName = typeof SUPPORTED_CHAINS[number]
+type ChainName = (typeof SUPPORTED_CHAINS)[number]
 
 const NATIVE: Record<ChainName, { symbol: string; decimals: number }> = {
   Bitcoin: { symbol: 'btc', decimals: 8 },
   Arbitrum: { symbol: 'eth', decimals: 18 },
   Spark: { symbol: 'btc', decimals: 8 },
-  Lightning: { symbol: 'btc', decimals: 8 }
+  Lightning: { symbol: 'btc', decimals: 8 },
 }
 
 const TOKENS: Record<string, Record<string, { address: string; decimals: number }>> = {
   Arbitrum: {
     usdt: { address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },
     usdt0: { address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },
-    usdc: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 }
-  }
+    usdc: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6 },
+  },
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function loadOrCreateSeed (): string {
+function loadOrCreateSeed(): string {
   if (process.env.SEED_PHRASE) return process.env.SEED_PHRASE
 
   if (existsSync(SEED_FILE)) {
@@ -49,62 +49,62 @@ function loadOrCreateSeed (): string {
   }
 
   const seed = WDK.getRandomSeedPhrase()
-  writeFileSync(SEED_FILE, seed + '\n', { mode: 0o600 })
+  writeFileSync(SEED_FILE, `${seed}\n`, { mode: 0o600 })
   console.log(`Generated new seed phrase and saved to ${SEED_FILE}`)
   console.log(`Seed: ${seed}`)
   console.log('Back this up!\n')
   return seed
 }
 
-async function initWdk (seed: string) {
+async function initWdk(seed: string) {
   const wdk = new WDK(seed)
     .registerWallet('bitcoin', WalletManagerBtc as any, {
-      client: { type: 'electrum', clientConfig: { host: 'blockstream.info', port: 700, protocol: 'ssl' } }
+      client: { type: 'electrum', clientConfig: { host: 'blockstream.info', port: 700, protocol: 'ssl' } },
     })
     .registerWallet('arbitrum', WalletManagerEvm, {
-      provider: 'https://arb1.arbitrum.io/rpc'
+      provider: 'https://arb1.arbitrum.io/rpc',
     })
     .registerWallet('spark', WalletManagerSpark as any, {
-      network: 'MAINNET'
+      network: 'MAINNET',
     })
 
   const accounts: Record<ChainName, IWalletAccountWithProtocols> = {
     Bitcoin: await wdk.getAccount('bitcoin', 0),
     Arbitrum: await wdk.getAccount('arbitrum', 0),
     Spark: await wdk.getAccount('spark', 0),
-    Lightning: await wdk.getAccount('spark', 0)
+    Lightning: await wdk.getAccount('spark', 0),
   }
 
   return { wdk, accounts }
 }
 
-function resolveChain (name: string): ChainName {
+function resolveChain(name: string): ChainName {
   const chainName = name as ChainName
   if (!SUPPORTED_CHAINS.includes(chainName)) {
     throw new Error(`Unknown chain "${name}". Supported: ${SUPPORTED_CHAINS.join(', ')}`)
   }
   if (chainName === 'Spark') {
-      // for now spark is connected via lightning payments because spark is not supported directly yet
-      return 'Lightning';
+    // for now spark is connected via lightning payments because spark is not supported directly yet
+    return 'Lightning'
   }
   return chainName
 }
 
-function formatUnits (value: bigint, decimals: number): string {
+function formatUnits(value: bigint, decimals: number): string {
   const s = value.toString().padStart(decimals + 1, '0')
   const whole = s.slice(0, s.length - decimals)
   const frac = s.slice(s.length - decimals)
   return `${whole}.${frac}`
 }
 
-function parseUnits (value: string, decimals: number): bigint {
+function parseUnits(value: string, decimals: number): bigint {
   const [whole = '0', frac = ''] = value.split('.')
   const padded = frac.padEnd(decimals, '0').slice(0, decimals)
   return BigInt(whole + padded)
 }
 
 /** Parse --key value pairs from argv. Returns { flags, positional }. */
-function parseFlags (args: string[]): { flags: Record<string, string>; positional: string[] } {
+function parseFlags(args: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {}
   const positional: string[] = []
   for (let i = 0; i < args.length; i++) {
@@ -118,37 +118,34 @@ function parseFlags (args: string[]): { flags: Record<string, string>; positiona
 }
 
 /** Parse "chain:token" into { chain, token }. Token defaults to the chain's native asset. */
-function parseChainToken (value: string): { chain: ChainName; token: string } {
+function parseChainToken(value: string): { chain: ChainName; token: string } {
   const [chainStr, token] = value.split(':')
   const chain = resolveChain(chainStr)
   return { chain, token: (token || NATIVE[chain].symbol).toLowerCase() }
 }
 
 /** Resolve a token key to its decimals on a given chain. */
-function getDecimals (chain: ChainName, tokenKey: string): number {
+function getDecimals(chain: ChainName, tokenKey: string): number {
   return TOKENS[chain]?.[tokenKey]?.decimals ?? NATIVE[chain].decimals
 }
 
 /** Resolve a token key to its contract address (or 'btc' for bitcoin/spark). */
-function getTokenAddress (chain: ChainName, tokenKey: string): string {
+function getTokenAddress(chain: ChainName, tokenKey: string): string {
   if ((chain === 'Bitcoin' || chain === 'Spark' || chain === 'Lightning') && tokenKey === 'btc') return 'btc'
   const info = TOKENS[chain]?.[tokenKey]
   if (!info) {
-    throw new Error(`Unknown token "${tokenKey}" on ${chain}. Known: ${Object.keys(TOKENS[chain] || {}).join(', ') || NATIVE[chain].symbol}`)
+    throw new Error(
+      `Unknown token "${tokenKey}" on ${chain}. Known: ${Object.keys(TOKENS[chain] || {}).join(', ') || NATIVE[chain].symbol}`,
+    )
   }
   return info.address
-}
-
-/** Check if the account has Spark Lightning methods. */
-function isSparkAccount (account: any): account is { createLightningInvoice: Function; payLightningInvoice: Function } {
-  return typeof account.createLightningInvoice === 'function'
 }
 
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
-async function cmdBalance (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, asset: string) {
+async function cmdBalance(accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, asset: string) {
   const account = accounts[chain]
   const native = NATIVE[chain]
   const assetLower = asset.toLowerCase()
@@ -160,14 +157,16 @@ async function cmdBalance (accounts: Record<ChainName, IWalletAccountWithProtoco
   } else {
     const token = TOKENS[chain]?.[assetLower]
     if (!token) {
-      throw new Error(`Unknown asset "${asset}" on ${chain}. Known tokens: ${Object.keys(TOKENS[chain] || {}).join(', ') || 'none'}`)
+      throw new Error(
+        `Unknown asset "${asset}" on ${chain}. Known tokens: ${Object.keys(TOKENS[chain] || {}).join(', ') || 'none'}`,
+      )
     }
     const balance = await account.getTokenBalance(token.address)
     console.log(`${formatUnits(balance, token.decimals)} ${asset.toUpperCase()}`)
   }
 }
 
-async function cmdReceive (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, amount?: string) {
+async function cmdReceive(accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, amount?: string) {
   const account = accounts[chain]
   const address = await account.getAddress()
   console.log(`${chain}: ${address}`)
@@ -182,19 +181,25 @@ async function cmdReceive (accounts: Record<ChainName, IWalletAccountWithProtoco
   }
 }
 
-async function cmdSend (accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, to: string, amount: string, feeRate?: string) {
+async function cmdSend(
+  accounts: Record<ChainName, IWalletAccountWithProtocols>,
+  chain: ChainName,
+  to: string,
+  amount: string,
+  feeRate?: string,
+) {
   const account = accounts[chain]
   const native = NATIVE[chain]
   const value = parseUnits(amount, native.decimals)
 
   console.log(`Sending ${amount} ${native.symbol.toUpperCase()} to ${to}...`)
 
-  let result
+  let result: { hash: string; fee: bigint }
   if (chain === 'Bitcoin') {
     result = await account.sendTransaction({
       to,
       value: Number(value),
-      ...(feeRate ? { feeRate: Number(feeRate) } : {})
+      ...(feeRate ? { feeRate: Number(feeRate) } : {}),
     })
   } else {
     result = await account.sendTransaction({ to, value })
@@ -204,7 +209,7 @@ async function cmdSend (accounts: Record<ChainName, IWalletAccountWithProtocols>
   console.log(`Fee: ${result.fee.toString()} ${chain === 'Bitcoin' ? 'sats' : 'wei'}`)
 }
 
-async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>, flags: Record<string, string>) {
+async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>, flags: Record<string, string>) {
   if (!flags.source || !flags.target) {
     throw new Error('Required: --source <chain:token> --target <chain:token> and --source-amount or --target-amount')
   }
@@ -219,141 +224,140 @@ async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>
   const storage = sqliteStorageFactory(DB_FILE)
   const satoraConfig: SatoraProtocolConfig = {
     walletStorage: storage.walletStorage,
-    swapStorage: storage.swapStorage
+    swapStorage: storage.swapStorage,
   }
   const satora = new SatoraProtocolBitcoin(account, satoraConfig)
 
   try {
-  const srcDecimals = getDecimals(src.chain, src.token)
-  const tgtDecimals = getDecimals(tgt.chain, tgt.token)
-  const srcTokenAddress = getTokenAddress(src.chain, src.token)
-  const tgtTokenAddress = getTokenAddress(tgt.chain, tgt.token)
+    const srcDecimals = getDecimals(src.chain, src.token)
+    const tgtDecimals = getDecimals(tgt.chain, tgt.token)
+    const srcTokenAddress = getTokenAddress(src.chain, src.token)
+    const tgtTokenAddress = getTokenAddress(tgt.chain, tgt.token)
 
-  // Parse amount — one of the two must be set
-  const sourceAmount = flags['source-amount'] ? Number(parseUnits(flags['source-amount'], srcDecimals)) : undefined
-  const targetAmount = flags['target-amount'] ? Number(parseUnits(flags['target-amount'], tgtDecimals)) : undefined
-  const amount = sourceAmount ?? targetAmount!
+    // Parse amount — one of the two must be set
+    const sourceAmount = flags['source-amount'] ? Number(parseUnits(flags['source-amount'], srcDecimals)) : undefined
+    const targetAmount = flags['target-amount'] ? Number(parseUnits(flags['target-amount'], tgtDecimals)) : undefined
+    const amount = sourceAmount ?? targetAmount!
 
-  // For Spark targets, create a Lightning invoice so the swap pays into Spark
-  let recipientAddress: string
-  if (tgt.chain === 'Spark' && targetAmount) {
-    const sparkAccount = accounts.Spark as any
-    const invoice = await sparkAccount.createLightningInvoice({ amountSats: targetAmount })
-    recipientAddress = invoice.invoice
-    console.log(`Created Lightning invoice for ${targetAmount} sats`)
-  } else if (tgt.chain === 'Spark' && sourceAmount) {
-    // We don't know the exact target amount yet — use the source address as placeholder.
-    // The swap will use sourceAmount and the server determines the target.
-    recipientAddress = await accounts[tgt.chain].getAddress()
-  } else {
-    recipientAddress = await accounts[tgt.chain].getAddress()
-  }
+    // For Spark targets, create a Lightning invoice so the swap pays into Spark
+    let recipientAddress: string
+    if (tgt.chain === 'Spark' && targetAmount) {
+      const sparkAccount = accounts.Spark as any
+      const invoice = await sparkAccount.createLightningInvoice({ amountSats: targetAmount })
+      recipientAddress = invoice.invoice
+      console.log(`Created Lightning invoice for ${targetAmount} sats`)
+    } else if (tgt.chain === 'Spark' && sourceAmount) {
+      // We don't know the exact target amount yet — use the source address as placeholder.
+      // The swap will use sourceAmount and the server determines the target.
+      recipientAddress = await accounts[tgt.chain].getAddress()
+    } else {
+      recipientAddress = await accounts[tgt.chain].getAddress()
+    }
 
-  const bridgeOptions: SatoraBridgeOptions = {
-    sourceChain: src.chain,
-    sourceToken: srcTokenAddress,
-    amount,
-    recipient: recipientAddress,
-    targetChain: tgt.chain,
-    token: tgtTokenAddress
-  }
+    const bridgeOptions: SatoraBridgeOptions = {
+      sourceChain: src.chain,
+      sourceToken: srcTokenAddress,
+      amount,
+      recipient: recipientAddress,
+      targetChain: tgt.chain,
+      token: tgtTokenAddress,
+    }
 
-  console.log(`Swap: ${src.chain}:${src.token} → ${tgt.chain}:${tgt.token}`)
-  console.log()
+    console.log(`Swap: ${src.chain}:${src.token} → ${tgt.chain}:${tgt.token}`)
+    console.log()
 
-  // Quote
-  const quote = await satora.quoteBridge(bridgeOptions)
-  console.log('Quote:')
-  console.log(`  Exchange rate : ${quote.exchangeRate}`)
-  console.log(`  Network fee   : ${quote.fee.toString()} sats`)
-  console.log(`  Protocol fee  : ${quote.bridgeFee.toString()} sats`)
-  console.log(`  You receive   : ${quote.targetAmount} (smallest unit)`)
-  console.log(`  Min/Max       : ${quote.minAmount} / ${quote.maxAmount} sats`)
-  console.log()
+    // Quote
+    const quote = await satora.quoteBridge(bridgeOptions)
+    console.log('Quote:')
+    console.log(`  Exchange rate : ${quote.exchangeRate}`)
+    console.log(`  Network fee   : ${quote.fee.toString()} sats`)
+    console.log(`  Protocol fee  : ${quote.bridgeFee.toString()} sats`)
+    console.log(`  You receive   : ${quote.targetAmount} (smallest unit)`)
+    console.log(`  Min/Max       : ${quote.minAmount} / ${quote.maxAmount} sats`)
+    console.log()
 
-  // Balance check
-  const isEvmSrc = satora.isEvmSource(bridgeOptions)
+    // Balance check
+    const isEvmSrc = satora.isEvmSource(bridgeOptions)
 
-  if (isEvmSrc) {
-    const srcToken = TOKENS[src.chain]?.[src.token]
-    if (srcToken) {
-      const tokenBal = await account.getTokenBalance(srcToken.address)
-      console.log(`Token balance: ${formatUnits(tokenBal, srcToken.decimals)} ${src.token.toUpperCase()}`)
-      if (sourceAmount && tokenBal < BigInt(sourceAmount)) {
+    if (isEvmSrc) {
+      const srcToken = TOKENS[src.chain]?.[src.token]
+      if (srcToken) {
+        const tokenBal = await account.getTokenBalance(srcToken.address)
+        console.log(`Token balance: ${formatUnits(tokenBal, srcToken.decimals)} ${src.token.toUpperCase()}`)
+        if (sourceAmount && tokenBal < BigInt(sourceAmount)) {
+          const addr = await account.getAddress()
+          console.log(`\nInsufficient token balance. Send tokens to ${addr} and try again.`)
+          return
+        }
+      }
+    } else if (sourceAmount) {
+      const balance = await account.getBalance()
+      // Spark has zero fees; Bitcoin needs ~300 sats for a 1-in 1-out tx
+      const estimatedTxFee = src.chain === 'Spark' || src.chain === 'Lightning' ? BigInt(0) : BigInt(300)
+      const totalRequired = BigInt(sourceAmount) + estimatedTxFee
+      console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
+      if (balance < totalRequired) {
         const addr = await account.getAddress()
-        console.log(`\nInsufficient token balance. Send tokens to ${addr} and try again.`)
+        console.log(`\nInsufficient balance. Send BTC to ${addr} and try again.`)
         return
       }
     }
-  } else if (sourceAmount) {
-    const balance = await account.getBalance()
-    // Spark has zero fees; Bitcoin needs ~300 sats for a 1-in 1-out tx
-    const estimatedTxFee = src.chain === 'Spark' || src.chain === 'Lightning' ? BigInt(0) : BigInt(300)
-    const totalRequired = BigInt(sourceAmount) + estimatedTxFee
-    console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
-    if (balance < totalRequired) {
-      const addr = await account.getAddress()
-      console.log(`\nInsufficient balance. Send BTC to ${addr} and try again.`)
-      return
-    }
-  }
-  console.log()
+    console.log()
 
-  // Create swap
-  console.log('Creating swap...')
-  const satoraBridgeResult = await satora.bridge(bridgeOptions)
+    // Create swap
+    console.log('Creating swap...')
+    const satoraBridgeResult = await satora.bridge(bridgeOptions)
 
-  console.log(`Swap ID  : ${satoraBridgeResult.hash}`)
-  console.log(`Deposit  : ${satoraBridgeResult.depositAmount.toString()} (smallest unit)`)
-  console.log(`Receive  : ${satoraBridgeResult.targetAmount} ${tgt.token.toUpperCase()}`)
-  console.log(`Source chain: ${bridgeOptions.sourceChain}, ${isLightning({chain: bridgeOptions.sourceChain})}`);
+    console.log(`Swap ID  : ${satoraBridgeResult.hash}`)
+    console.log(`Deposit  : ${satoraBridgeResult.depositAmount.toString()} (smallest unit)`)
+    console.log(`Receive  : ${satoraBridgeResult.targetAmount} ${tgt.token.toUpperCase()}`)
+    console.log(`Source chain: ${bridgeOptions.sourceChain}, ${isLightning({ chain: bridgeOptions.sourceChain })}`)
 
-    if (isLightning({chain: bridgeOptions.sourceChain})) {
-
-        console.log('Funding swap...')
-        const sparkAccount = accounts.Spark as any
-        const payment = await sparkAccount.payLightningInvoice({
-            invoice: satoraBridgeResult.lightningInvoice,
-            maxFeeSats: 1000
-        })
-        console.log(`Paid: ${payment.id}`)
-    } else if (isBtcOnchain({chain: bridgeOptions.sourceChain}) && satoraBridgeResult.depositAddress) {
-        console.log('Funding swap...')
-        const tx = await account.sendTransaction({
-            to: satoraBridgeResult.depositAddress ,
-            value: Number(satoraBridgeResult.depositAmount)
-        })
-        console.log(`Funded: ${tx.hash}`)
+    if (isLightning({ chain: bridgeOptions.sourceChain })) {
+      console.log('Funding swap...')
+      const sparkAccount = accounts.Spark as any
+      const payment = await sparkAccount.payLightningInvoice({
+        invoice: satoraBridgeResult.lightningInvoice,
+        maxFeeSats: 1000,
+      })
+      console.log(`Paid: ${payment.id}`)
+    } else if (isBtcOnchain({ chain: bridgeOptions.sourceChain }) && satoraBridgeResult.depositAddress) {
+      console.log('Funding swap...')
+      const tx = await account.sendTransaction({
+        to: satoraBridgeResult.depositAddress,
+        value: Number(satoraBridgeResult.depositAmount),
+      })
+      console.log(`Funded: ${tx.hash}`)
     } else if (isEvmToken(bridgeOptions.sourceChain)) {
-        // console.log(`HTLC     : ${satoraBridgeResult.evmHtlcAddress}`)
-        // console.log()
-        // console.log('Funding swap via gasless relay...')
-        // const { txHash } = await satora.fundSwapGasless(satoraBridgeResult.hash)
-        throw Error("not yet implemented");
+      // console.log(`HTLC     : ${satoraBridgeResult.evmHtlcAddress}`)
+      // console.log()
+      // console.log('Funding swap via gasless relay...')
+      // const { txHash } = await satora.fundSwapGasless(satoraBridgeResult.hash)
+      throw Error('not yet implemented')
     } else {
-        throw Error("Unsupported swapping direction");
+      throw Error('Unsupported swapping direction')
     }
 
-  // Poll
-  console.log('\nWaiting for swap completion...')
-  while (true) {
-    const swap = await satora.getSwap(satoraBridgeResult.hash)
-    console.log(`  Status: ${swap.status}`)
+    // Poll
+    console.log('\nWaiting for swap completion...')
+    while (true) {
+      const swap = await satora.getSwap(satoraBridgeResult.hash)
+      console.log(`  Status: ${swap.status}`)
 
-    if (swap.status === 'serverfunded') break
-    if (swap.status === 'clientrefunded' || swap.status === 'clientrefundedserverrefunded') {
-      console.log('Swap was refunded.')
-      return
+      if (swap.status === 'serverfunded') break
+      if (swap.status === 'clientrefunded' || swap.status === 'clientrefundedserverrefunded') {
+        console.log('Swap was refunded.')
+        return
+      }
+
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
     }
 
-    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
-  }
-
-  // Claim
-  console.log('\nClaiming...')
-  const claim = await satora.claim(satoraBridgeResult.hash)
-  console.log('Done!', JSON.stringify(claim, null, 2))
-  console.log(`${tgt.token.toUpperCase()} should now be in: ${recipientAddress}`)
+    // Claim
+    console.log('\nClaiming...')
+    const claim = await satora.claim(satoraBridgeResult.hash)
+    console.log('Done!', JSON.stringify(claim, null, 2))
+    console.log(`${tgt.token.toUpperCase()} should now be in: ${recipientAddress}`)
   } finally {
     storage.close()
   }
@@ -363,7 +367,7 @@ async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>
 // Usage
 // ---------------------------------------------------------------------------
 
-function printUsage () {
+function printUsage() {
   console.log(`Usage:
   cli balance <chain> <asset>              Check balance
   cli send <chain> <to> <amount> [feeRate] Send native asset
@@ -390,7 +394,7 @@ Examples:
 // Main
 // ---------------------------------------------------------------------------
 
-async function main () {
+async function main() {
   const [command, ...args] = process.argv.slice(2)
 
   if (!command || command === 'help') {
@@ -436,7 +440,7 @@ async function main () {
   }
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('Error:', err.message || err)
   if (err.cause) console.error('Cause:', err.cause)
   if (err.response) console.error('Response:', JSON.stringify(err.response, null, 2))
