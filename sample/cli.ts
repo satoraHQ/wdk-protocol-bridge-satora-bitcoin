@@ -2,6 +2,8 @@ import WDK from '@tetherto/wdk'
 import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
+import SatoraProtocolBitcoin from '@satora/wdk-protocol-bridge-satora-bitcoin'
+import type { SatoraProtocolConfig, SatoraBridgeOptions } from '@satora/wdk-protocol-bridge-satora-bitcoin'
 import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -11,6 +13,7 @@ import { homedir } from 'os'
 // ---------------------------------------------------------------------------
 
 const SEED_FILE = join(homedir(), '.wdk-cli-seed')
+const POLL_INTERVAL_MS = 10_000
 
 const SUPPORTED_CHAINS = ['bitcoin', 'arbitrum'] as const
 type ChainName = typeof SUPPORTED_CHAINS[number]
@@ -135,15 +138,117 @@ async function cmdSend (accounts: Record<ChainName, IWalletAccountWithProtocols>
   console.log(`Fee: ${result.fee.toString()} ${chain === 'bitcoin' ? 'sats' : 'wei'}`)
 }
 
+async function cmdSwap (
+  accounts: Record<ChainName, IWalletAccountWithProtocols>,
+  sourceChain: string,
+  targetChain: string,
+  targetToken: string,
+  amount: string
+) {
+  const srcChain = resolveChain(sourceChain)
+  const account = accounts[srcChain]
+  const native = NATIVE[srcChain]
+  const sats = Number(parseUnits(amount, native.decimals))
+
+  const satoraConfig: SatoraProtocolConfig = {}
+  const satora = new SatoraProtocolBitcoin(account, satoraConfig)
+
+  // Resolve target token address
+  const tgtChain = resolveChain(targetChain)
+  const token = TOKENS[tgtChain]?.[targetToken.toLowerCase()]
+  if (!token) {
+    throw new Error(`Unknown target token "${targetToken}" on ${targetChain}. Known: ${Object.keys(TOKENS[tgtChain] || {}).join(', ') || 'none'}`)
+  }
+
+  const recipientAddress = await accounts[tgtChain].getAddress()
+
+  const bridgeOptions: SatoraBridgeOptions = {
+    sourceChain: srcChain,
+    amount: sats,
+    recipient: recipientAddress,
+    targetChain: tgtChain,
+    token: token.address
+  }
+
+  // Quote
+  const quote = await satora.quoteBridge(bridgeOptions)
+  console.log('Quote:')
+  console.log(`  Exchange rate : ${quote.exchangeRate}`)
+  console.log(`  Network fee   : ${quote.fee.toString()} sats`)
+  console.log(`  Protocol fee  : ${quote.bridgeFee.toString()} sats`)
+  console.log(`  You receive   : ${quote.targetAmount} (smallest unit)`)
+  console.log(`  Min/Max       : ${quote.minAmount} / ${quote.maxAmount} sats`)
+  console.log()
+
+  // Balance check
+  const balance = await account.getBalance()
+  const estimatedTxFee = BigInt(300)
+  const totalRequired = BigInt(sats) + estimatedTxFee
+  console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
+
+  if (balance < totalRequired) {
+    const addr = await account.getAddress()
+    console.log(`\nInsufficient balance. Send BTC to ${addr} and try again.`)
+    return
+  }
+  console.log()
+
+  // Create swap
+  console.log('Creating swap...')
+  const bridge = await satora.bridge(bridgeOptions)
+
+  console.log(`Swap ID  : ${bridge.hash}`)
+  console.log(`Deposit  : ${bridge.depositAmount.toString()} sats`)
+  console.log(`Receive  : ${bridge.targetAmount} ${targetToken.toUpperCase()}`)
+
+  if (bridge.depositAddress) {
+    console.log(`Address  : ${bridge.depositAddress}`)
+    console.log()
+
+    // Fund
+    console.log('Funding swap...')
+    const tx = await account.sendTransaction({
+      to: bridge.depositAddress,
+      value: Number(bridge.depositAmount)
+    })
+    console.log(`Funded: ${tx.hash}`)
+  } else if (bridge.lightningInvoice) {
+    console.log(`Invoice  : ${bridge.lightningInvoice}`)
+    console.log('\nPay this Lightning invoice to fund the swap.')
+  }
+
+  // Poll
+  console.log('\nWaiting for server to fund the EVM side...')
+  while (true) {
+    const swap = await satora.getSwap(bridge.hash)
+    console.log(`  Status: ${swap.status}`)
+
+    if (swap.status === 'serverfunded') break
+    if (swap.status === 'clientrefunded' || swap.status === 'clientrefundedserverrefunded') {
+      console.log('Swap was refunded.')
+      return
+    }
+
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS))
+  }
+
+  // Claim
+  console.log('\nClaiming...')
+  const claim = await satora.claim(bridge.hash)
+  console.log('Done!', JSON.stringify(claim, null, 2))
+  console.log(`${targetToken.toUpperCase()} should now be in: ${recipientAddress}`)
+}
+
 // ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
 
 function printUsage () {
   console.log(`Usage:
-  cli balance <chain> <asset>              Check balance
-  cli send <chain> <to> <amount> [feeRate] Send native asset
-  cli receive <chain>                      Show receive address
+  cli balance <chain> <asset>                          Check balance
+  cli send <chain> <to> <amount> [feeRate]             Send native asset
+  cli receive <chain>                                  Show receive address
+  cli swap <sourceChain> <targetChain> <token> <amount> Bridge via Satora
 
 Chains: ${SUPPORTED_CHAINS.join(', ')}
 Assets: btc, eth, usdt, usdt0, usdc
@@ -152,7 +257,8 @@ Examples:
   cli balance bitcoin btc
   cli balance arbitrum usdt0
   cli send bitcoin bc1q... 0.001 2
-  cli receive arbitrum`)
+  cli receive arbitrum
+  cli swap bitcoin arbitrum usdt 0.001`)
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +294,11 @@ async function main () {
         if (args.length < 3) throw new Error('Usage: cli send <chain> <to> <amount> [feeRate]')
         const chain = resolveChain(args[0])
         await cmdSend(accounts, chain, args[1], args[2], args[3])
+        break
+      }
+      case 'swap': {
+        if (args.length < 4) throw new Error('Usage: cli swap <sourceChain> <targetChain> <token> <amount>')
+        await cmdSwap(accounts, args[0], args[1], args[2], args[3])
         break
       }
       default:
