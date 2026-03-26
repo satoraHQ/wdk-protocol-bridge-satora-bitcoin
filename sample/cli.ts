@@ -88,6 +88,42 @@ function parseUnits (value: string, decimals: number): bigint {
   return BigInt(whole + padded)
 }
 
+/** Parse --key value pairs from argv. Returns { flags, positional }. */
+function parseFlags (args: string[]): { flags: Record<string, string>; positional: string[] } {
+  const flags: Record<string, string> = {}
+  const positional: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i].startsWith('--') && i + 1 < args.length) {
+      flags[args[i].slice(2)] = args[++i]
+    } else {
+      positional.push(args[i])
+    }
+  }
+  return { flags, positional }
+}
+
+/** Parse "chain:token" into { chain, token }. Token defaults to the chain's native asset. */
+function parseChainToken (value: string): { chain: ChainName; token: string } {
+  const [chainStr, token] = value.split(':')
+  const chain = resolveChain(chainStr)
+  return { chain, token: (token || NATIVE[chain].symbol).toLowerCase() }
+}
+
+/** Resolve a token key to its decimals on a given chain. */
+function getDecimals (chain: ChainName, tokenKey: string): number {
+  return TOKENS[chain]?.[tokenKey]?.decimals ?? NATIVE[chain].decimals
+}
+
+/** Resolve a token key to its contract address (or 'btc' for bitcoin). */
+function getTokenAddress (chain: ChainName, tokenKey: string): string {
+  if (chain === 'bitcoin' && tokenKey === 'btc') return 'btc'
+  const info = TOKENS[chain]?.[tokenKey]
+  if (!info) {
+    throw new Error(`Unknown token "${tokenKey}" on ${chain}. Known: ${Object.keys(TOKENS[chain] || {}).join(', ') || NATIVE[chain].symbol}`)
+  }
+  return info.address
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
@@ -138,37 +174,44 @@ async function cmdSend (accounts: Record<ChainName, IWalletAccountWithProtocols>
   console.log(`Fee: ${result.fee.toString()} ${chain === 'bitcoin' ? 'sats' : 'wei'}`)
 }
 
-async function cmdSwap (
-  accounts: Record<ChainName, IWalletAccountWithProtocols>,
-  sourceChain: string,
-  targetChain: string,
-  targetToken: string,
-  amount: string
-) {
-  const srcChain = resolveChain(sourceChain)
-  const account = accounts[srcChain]
-  const native = NATIVE[srcChain]
-  const sats = Number(parseUnits(amount, native.decimals))
+async function cmdSwap (accounts: Record<ChainName, IWalletAccountWithProtocols>, flags: Record<string, string>) {
+  if (!flags.source || !flags.target) {
+    throw new Error('Required: --source <chain:token> --target <chain:token> and --source-amount or --target-amount')
+  }
+  if (!flags['source-amount'] && !flags['target-amount']) {
+    throw new Error('Provide either --source-amount or --target-amount')
+  }
+
+  const src = parseChainToken(flags.source)
+  const tgt = parseChainToken(flags.target)
+  const account = accounts[src.chain]
 
   const satoraConfig: SatoraProtocolConfig = {}
   const satora = new SatoraProtocolBitcoin(account, satoraConfig)
 
-  // Resolve target token address
-  const tgtChain = resolveChain(targetChain)
-  const token = TOKENS[tgtChain]?.[targetToken.toLowerCase()]
-  if (!token) {
-    throw new Error(`Unknown target token "${targetToken}" on ${targetChain}. Known: ${Object.keys(TOKENS[tgtChain] || {}).join(', ') || 'none'}`)
-  }
+  const srcDecimals = getDecimals(src.chain, src.token)
+  const tgtDecimals = getDecimals(tgt.chain, tgt.token)
+  const srcTokenAddress = getTokenAddress(src.chain, src.token)
+  const tgtTokenAddress = getTokenAddress(tgt.chain, tgt.token)
 
-  const recipientAddress = await accounts[tgtChain].getAddress()
+  // Parse amount — one of the two must be set
+  const sourceAmount = flags['source-amount'] ? Number(parseUnits(flags['source-amount'], srcDecimals)) : undefined
+  const targetAmount = flags['target-amount'] ? Number(parseUnits(flags['target-amount'], tgtDecimals)) : undefined
+  const amount = sourceAmount ?? targetAmount!
+
+  const recipientAddress = await accounts[tgt.chain].getAddress()
 
   const bridgeOptions: SatoraBridgeOptions = {
-    sourceChain: srcChain,
-    amount: sats,
+    sourceChain: src.chain,
+    sourceToken: srcTokenAddress,
+    amount,
     recipient: recipientAddress,
-    targetChain: tgtChain,
-    token: token.address
+    targetChain: tgt.chain,
+    token: tgtTokenAddress
   }
+
+  console.log(`Swap: ${src.chain}:${src.token} → ${tgt.chain}:${tgt.token}`)
+  console.log()
 
   // Quote
   const quote = await satora.quoteBridge(bridgeOptions)
@@ -181,15 +224,29 @@ async function cmdSwap (
   console.log()
 
   // Balance check
-  const balance = await account.getBalance()
-  const estimatedTxFee = BigInt(300)
-  const totalRequired = BigInt(sats) + estimatedTxFee
-  console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
+  const isEvmSrc = satora.isEvmSource(bridgeOptions)
 
-  if (balance < totalRequired) {
-    const addr = await account.getAddress()
-    console.log(`\nInsufficient balance. Send BTC to ${addr} and try again.`)
-    return
+  if (isEvmSrc) {
+    const srcToken = TOKENS[src.chain]?.[src.token]
+    if (srcToken) {
+      const tokenBal = await account.getTokenBalance(srcToken.address)
+      console.log(`Token balance: ${formatUnits(tokenBal, srcToken.decimals)} ${src.token.toUpperCase()}`)
+      if (sourceAmount && tokenBal < BigInt(sourceAmount)) {
+        const addr = await account.getAddress()
+        console.log(`\nInsufficient token balance. Send tokens to ${addr} and try again.`)
+        return
+      }
+    }
+  } else if (sourceAmount) {
+    const balance = await account.getBalance()
+    const estimatedTxFee = BigInt(300)
+    const totalRequired = BigInt(sourceAmount) + estimatedTxFee
+    console.log(`Balance: ${balance.toString()} sats, need ~${totalRequired.toString()} sats`)
+    if (balance < totalRequired) {
+      const addr = await account.getAddress()
+      console.log(`\nInsufficient balance. Send BTC to ${addr} and try again.`)
+      return
+    }
   }
   console.log()
 
@@ -198,27 +255,32 @@ async function cmdSwap (
   const bridge = await satora.bridge(bridgeOptions)
 
   console.log(`Swap ID  : ${bridge.hash}`)
-  console.log(`Deposit  : ${bridge.depositAmount.toString()} sats`)
-  console.log(`Receive  : ${bridge.targetAmount} ${targetToken.toUpperCase()}`)
+  console.log(`Deposit  : ${bridge.depositAmount.toString()} (smallest unit)`)
+  console.log(`Receive  : ${bridge.targetAmount} ${tgt.token.toUpperCase()}`)
 
+  // Fund the swap based on source chain type
   if (bridge.depositAddress) {
     console.log(`Address  : ${bridge.depositAddress}`)
     console.log()
-
-    // Fund
     console.log('Funding swap...')
     const tx = await account.sendTransaction({
       to: bridge.depositAddress,
       value: Number(bridge.depositAmount)
     })
     console.log(`Funded: ${tx.hash}`)
+  } else if (bridge.evmHtlcAddress) {
+    console.log(`HTLC     : ${bridge.evmHtlcAddress}`)
+    console.log()
+    console.log('Funding swap via gasless relay...')
+    const { txHash } = await satora.fundSwapGasless(bridge.hash)
+    console.log(`Funded: ${txHash}`)
   } else if (bridge.lightningInvoice) {
     console.log(`Invoice  : ${bridge.lightningInvoice}`)
     console.log('\nPay this Lightning invoice to fund the swap.')
   }
 
   // Poll
-  console.log('\nWaiting for server to fund the EVM side...')
+  console.log('\nWaiting for swap completion...')
   while (true) {
     const swap = await satora.getSwap(bridge.hash)
     console.log(`  Status: ${swap.status}`)
@@ -236,7 +298,7 @@ async function cmdSwap (
   console.log('\nClaiming...')
   const claim = await satora.claim(bridge.hash)
   console.log('Done!', JSON.stringify(claim, null, 2))
-  console.log(`${targetToken.toUpperCase()} should now be in: ${recipientAddress}`)
+  console.log(`${tgt.token.toUpperCase()} should now be in: ${recipientAddress}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +307,10 @@ async function cmdSwap (
 
 function printUsage () {
   console.log(`Usage:
-  cli balance <chain> <asset>                          Check balance
-  cli send <chain> <to> <amount> [feeRate]             Send native asset
-  cli receive <chain>                                  Show receive address
-  cli swap <sourceChain> <targetChain> <token> <amount> Bridge via Satora
+  cli balance <chain> <asset>              Check balance
+  cli send <chain> <to> <amount> [feeRate] Send native asset
+  cli receive <chain>                      Show receive address
+  cli swap --source <chain:token> --target <chain:token> --source-amount <n> | --target-amount <n>
 
 Chains: ${SUPPORTED_CHAINS.join(', ')}
 Assets: btc, eth, usdt, usdt0, usdc
@@ -258,7 +320,9 @@ Examples:
   cli balance arbitrum usdt0
   cli send bitcoin bc1q... 0.001 2
   cli receive arbitrum
-  cli swap bitcoin arbitrum usdt 0.001`)
+  cli swap --source bitcoin:btc --target arbitrum:usdt --source-amount 0.001
+  cli swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001
+  cli swap --source arbitrum:usdt --target bitcoin:btc --source-amount 10`)
 }
 
 // ---------------------------------------------------------------------------
@@ -297,8 +361,8 @@ async function main () {
         break
       }
       case 'swap': {
-        if (args.length < 4) throw new Error('Usage: cli swap <sourceChain> <targetChain> <token> <amount>')
-        await cmdSwap(accounts, args[0], args[1], args[2], args[3])
+        const { flags } = parseFlags(args)
+        await cmdSwap(accounts, flags)
         break
       }
       default:

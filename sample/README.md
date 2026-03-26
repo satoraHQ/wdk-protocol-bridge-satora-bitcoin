@@ -45,6 +45,22 @@ npm run cli -- send bitcoin bc1q... 0.001 2
 npm run cli -- send arbitrum 0x... 0.01
 ```
 
+#### `swap --source <chain:token> --target <chain:token> --source-amount <n> | --target-amount <n>`
+
+Bridge between chains via the Satora protocol. Specify source and target as `chain:token` pairs. Provide either
+`--source-amount` (how much to send) or `--target-amount` (how much to receive).
+
+```bash
+# BTC → USDT on Arbitrum (send 0.001 BTC)
+npm run cli -- swap --source bitcoin:btc --target arbitrum:usdt --source-amount 0.001
+
+# USDT → BTC (send 10 USDT)
+npm run cli -- swap --source arbitrum:usdt --target bitcoin:btc --source-amount 10
+
+# USDT → BTC (receive exactly 0.001 BTC)
+npm run cli -- swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001
+```
+
 ### Supported chains and assets
 
 | Chain      | Native | Tokens                  |

@@ -36,9 +36,10 @@
  * @property {string} hash - The swap ID.
  * @property {bigint} fee - Network fee in satoshis.
  * @property {bigint} bridgeFee - Protocol fee in satoshis.
- * @property {string} [depositAddress] - Bitcoin HTLC address to send BTC to (on-chain swaps).
- * @property {string} [lightningInvoice] - Lightning invoice to pay (Lightning swaps).
- * @property {bigint} depositAmount - Exact amount in satoshis to send.
+ * @property {string} [depositAddress] - Bitcoin HTLC address to send BTC to (BTC on-chain → EVM swaps).
+ * @property {string} [lightningInvoice] - Lightning invoice to pay (Lightning → * swaps).
+ * @property {string} [evmHtlcAddress] - EVM HTLC contract address (EVM → * swaps). Fund via {@link fundSwapGasless}.
+ * @property {bigint} depositAmount - Exact amount in source token's smallest unit to deposit.
  * @property {string} targetAmount - Amount of target token the user will receive (in smallest unit).
  */
 /**
@@ -134,19 +135,40 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
      * Creates a bridge swap.
      *
      * Supports multiple directions:
-     * - Bitcoin on-chain → EVM token (default)
-     * - Lightning → EVM token
-     * - Lightning → Arkade
-     * - Bitcoin on-chain → Arkade
+     * - Bitcoin on-chain → EVM token
+     * - Lightning → EVM token / Arkade
+     * - EVM token → Bitcoin on-chain / Lightning / Arkade
      *
-     * For on-chain swaps, returns a `depositAddress` (Bitcoin HTLC).
-     * For Lightning swaps, returns a `lightningInvoice` to pay.
+     * For BTC on-chain sources, returns a `depositAddress` (Bitcoin HTLC).
+     * For Lightning sources, returns a `lightningInvoice` to pay.
+     * For EVM sources, returns an `evmHtlcAddress`. Use {@link fundSwapGasless} to fund.
+     *
      * After funding, use {@link claim} to complete the swap.
      *
      * @param {SatoraBridgeOptions} options - The bridge's options.
      * @returns {Promise<SatoraBridgeResult>} The bridge result with deposit instructions.
      */
     bridge(options: SatoraBridgeOptions): Promise<SatoraBridgeResult>;
+    /**
+     * Funds an EVM-sourced swap via gasless relay (Permit2).
+     *
+     * Call this after {@link bridge} when the source is an EVM chain.
+     * The SDK signs the Permit2 authorization off-chain and submits
+     * it to the server, which funds the HTLC on behalf of the user.
+     *
+     * @param {string} swapId - The swap ID returned by {@link bridge}.
+     * @returns {Promise<{ txHash: string }>} The relay transaction hash.
+     */
+    fundSwapGasless(swapId: string): Promise<{
+        txHash: string;
+    }>;
+    /**
+     * Returns true if the source chain in the given options is an EVM chain.
+     *
+     * @param {SatoraBridgeOptions} options
+     * @returns {boolean}
+     */
+    isEvmSource(options: SatoraBridgeOptions): boolean;
     /**
      * Gets the current status of a swap.
      *
@@ -265,15 +287,19 @@ export type SatoraBridgeResult = {
      */
     bridgeFee: bigint;
     /**
-     * - Bitcoin HTLC address to send BTC to (on-chain swaps).
+     * - Bitcoin HTLC address to send BTC to (BTC on-chain → EVM swaps).
      */
     depositAddress?: string;
     /**
-     * - Lightning invoice to pay (Lightning swaps).
+     * - Lightning invoice to pay (Lightning → * swaps).
      */
     lightningInvoice?: string;
     /**
-     * - Exact amount in satoshis to send.
+     * - EVM HTLC contract address (EVM → * swaps). Fund via {@link fundSwapGasless}.
+     */
+    evmHtlcAddress?: string;
+    /**
+     * - Exact amount in source token's smallest unit to deposit.
      */
     depositAmount: bigint;
     /**
