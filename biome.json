@@ -28,7 +28,7 @@
     }
   },
   "files": {
-    "includes": ["**/*.ts", "!!**/node_modules", "!!**/dist"]
+    "includes": ["**/*.ts", "!!**/node_modules", "!!**/dist", "!!**/types"]
   },
   "overrides": [
     {
