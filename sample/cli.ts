@@ -171,7 +171,7 @@ async function cmdReceive(accounts: Record<ChainName, IWalletAccountWithProtocol
   const address = await account.getAddress()
   console.log(`${chain}: ${address}`)
 
-  if (chain === 'Spark' && amount) {
+  if ((chain === 'Spark' || chain === 'Lightning') && amount) {
     const sats = Number(amount)
     const sparkAccount = account as any
     const result = await sparkAccount.createLightningInvoice({ amountSats: sats })
