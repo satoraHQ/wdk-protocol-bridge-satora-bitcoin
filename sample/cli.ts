@@ -9,7 +9,7 @@ import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
 import WDK from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
-import WalletManagerSpark from '@tetherto/wdk-wallet-spark'
+import WalletManagerSpark, {LightningSendRequest, WalletAccountSpark} from '@tetherto/wdk-wallet-spark'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -363,6 +363,16 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
   }
 }
 
+async function cmdPaymentStatus(accounts: Record<ChainName, IWalletAccountWithProtocols>, paymentId: string) {
+  const account = accounts.Spark as unknown as WalletAccountSpark
+  const sendRequest = await account.getLightningSendRequest(paymentId)
+  if (sendRequest) {
+    console.log('Payment status:', sendRequest.status)
+  } else {
+    console.log('No send request found for:', paymentId)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Usage
 // ---------------------------------------------------------------------------
@@ -373,6 +383,7 @@ function printUsage() {
   cli send <chain> <to> <amount> [feeRate] Send native asset
   cli receive <chain> [sats]                Show address (+ Lightning invoice for Spark)
   cli swap --source <chain:token> --target <chain:token> --source-amount <n> | --target-amount <n>
+  cli payment-status <paymentId>          Check Lightning payment status
 
 Chains: ${SUPPORTED_CHAINS.join(', ')}
 Assets: btc, eth, usdt, usdt0, usdc
@@ -430,13 +441,22 @@ async function main() {
         await cmdSwap(accounts, flags)
         break
       }
+      case 'payment-status': {
+        if (args.length < 1) throw new Error('Usage: cli payment-status <paymentId>')
+        await cmdPaymentStatus(accounts, args[0])
+        break
+      }
       default:
         console.error(`Unknown command: ${command}`)
         printUsage()
         process.exitCode = 1
     }
   } finally {
-    wdk.dispose()
+      try {
+          wdk.dispose()
+      } catch (err) {
+          console.error(`Failed to dispose: ${err}`)
+      }
   }
 }
 
