@@ -242,9 +242,9 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
     // For Spark targets, create a Lightning invoice so the swap pays into Spark
     let recipientAddress: string
     if (tgt.chain === 'Spark' && targetAmount) {
-      const sparkAccount = accounts.Spark as any
+      const sparkAccount = accounts.Spark as unknown as WalletAccountSpark
       const invoice = await sparkAccount.createLightningInvoice({ amountSats: targetAmount })
-      recipientAddress = invoice.invoice
+      recipientAddress = invoice.invoice.encodedInvoice
       console.log(`Created Lightning invoice for ${targetAmount} sats`)
     } else if (tgt.chain === 'Spark' && sourceAmount) {
       // We don't know the exact target amount yet — use the source address as placeholder.
@@ -313,14 +313,39 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
     console.log(`Receive  : ${satoraBridgeResult.targetAmount} ${tgt.token.toUpperCase()}`)
     console.log(`Source chain: ${bridgeOptions.sourceChain}, ${isLightning({ chain: bridgeOptions.sourceChain })}`)
 
-    if (isLightning({ chain: bridgeOptions.sourceChain })) {
+    let lightningPaymentId: string | undefined
+    const sparkAccount = accounts.Spark as unknown as WalletAccountSpark
+
+    if (isLightning({ chain: bridgeOptions.sourceChain }) && satoraBridgeResult.lightningInvoice) {
       console.log('Funding swap...')
-      const sparkAccount = accounts.Spark as any
       const payment = await sparkAccount.payLightningInvoice({
         invoice: satoraBridgeResult.lightningInvoice,
         maxFeeSats: 1000,
       })
-      console.log(`Paid: ${payment.id}`)
+      console.log(`Paid: ${JSON.stringify(payment)}`)
+      lightningPaymentId = payment.id
+
+      // Poll until the Lightning payment settles
+      console.log('Checking Lightning payment status...')
+      while (true) {
+        const sendRequest : LightningSendRequest | null = await sparkAccount.getLightningSendRequest(payment.id)
+        const status = sendRequest?.status
+        console.log(`  Lightning payment status: ${status}`)
+
+        if (status === 'TRANSFER_COMPLETED' || status === 'LIGHTNING_PAYMENT_SUCCEEDED' || status === 'PREIMAGE_PROVIDED' || status === 'LIGHTNING_PAYMENT_INITIATED') {
+          break
+        }
+        if (status === 'USER_SWAP_RETURNED' || status === 'USER_SWAP_RETURN_FAILED' || status === 'LIGHTNING_PAYMENT_FAILED' || status === 'TRANSFER_FAILED') {
+          console.error(`\nLightning payment failed:`)
+          console.error(`  Status   : ${status}`)
+          console.error(`  Invoice  : ${sendRequest?.encodedInvoice}`)
+          console.error(`  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`)
+          console.error(`  Updated  : ${sendRequest?.updatedAt}`)
+          throw new Error(`Lightning payment failed (${status}). Funds should be returned to your Spark wallet.`)
+        }
+
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+      }
     } else if (isBtcOnchain({ chain: bridgeOptions.sourceChain }) && satoraBridgeResult.depositAddress) {
       console.log('Funding swap...')
       const tx = await account.sendTransaction({
@@ -329,10 +354,6 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
       })
       console.log(`Funded: ${tx.hash}`)
     } else if (isEvmToken(bridgeOptions.sourceChain)) {
-      // console.log(`HTLC     : ${satoraBridgeResult.evmHtlcAddress}`)
-      // console.log()
-      // console.log('Funding swap via gasless relay...')
-      // const { txHash } = await satora.fundSwapGasless(satoraBridgeResult.hash)
       throw Error('not yet implemented')
     } else {
       throw Error('Unsupported swapping direction')
@@ -348,6 +369,21 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
       if (swap.status === 'clientrefunded' || swap.status === 'clientrefundedserverrefunded') {
         console.log('Swap was refunded.')
         return
+      }
+
+      // If the swap is still pending and we paid via Lightning, check if the payment failed
+      if (lightningPaymentId) {
+        const sendRequest = await sparkAccount.getLightningSendRequest(lightningPaymentId)
+        const lnStatus = sendRequest?.status
+        if (lnStatus === 'USER_SWAP_RETURNED' || lnStatus === 'USER_SWAP_RETURN_FAILED' || lnStatus === 'LIGHTNING_PAYMENT_FAILED' || lnStatus === 'TRANSFER_FAILED') {
+          console.error(`\nLightning payment failed:`)
+          console.error(`  Status   : ${lnStatus}`)
+          console.error(`  Invoice  : ${sendRequest?.encodedInvoice}`)
+          console.error(`  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`)
+          console.error(`  Updated  : ${sendRequest?.updatedAt}`)
+          console.error(`  SendRequest  : ${JSON.stringify(sendRequest)}`)
+          throw new Error(`Lightning payment failed (${lnStatus}). Funds should be returned to your Spark wallet.`)
+        }
       }
 
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
