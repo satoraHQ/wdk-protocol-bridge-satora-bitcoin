@@ -378,16 +378,16 @@ Chains: ${SUPPORTED_CHAINS.join(', ')}
 Assets: btc, eth, usdt, usdt0, usdc
 
 Examples:
-  cli balance bitcoin btc
-  cli balance spark btc
-  cli balance arbitrum usdt0
-  cli send bitcoin bc1q... 0.001 2
-  cli receive spark
-  cli receive spark 10000
-  cli swap --source bitcoin:btc --target arbitrum:usdt --source-amount 0.001
-  cli swap --source spark:btc --target arbitrum:usdt --source-amount 0.001
-  cli swap --source arbitrum:usdt --target spark:btc --source-amount 10
-  cli swap --source arbitrum:usdt --target bitcoin:btc --target-amount 0.001`)
+  cli balance Bitcoin btc
+  cli balance Spark btc
+  cli balance Arbitrum usdt0
+  cli send Bitcoin bc1q... 0.001 2
+  cli receive Spark
+  cli receive Spark 10000
+  cli swap --source Bitcoin:btc --target Arbitrum:usdt --source-amount 0.001
+  cli swap --source Spark:btc --target Arbitrum:usdt --source-amount 0.001
+  cli swap --source Arbitrum:usdt --target Spark:btc --source-amount 10
+  cli swap --source Arbitrum:usdt --target Bitcoin:btc --target-amount 0.001`)
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx index.ts",
-    "cli": "tsx cli.ts",
+    "cli": "node --env-file=.env --import tsx cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
