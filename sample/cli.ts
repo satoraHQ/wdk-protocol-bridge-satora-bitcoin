@@ -9,7 +9,7 @@ import type { IWalletAccountWithProtocols } from '@tetherto/wdk'
 import WDK from '@tetherto/wdk'
 import WalletManagerBtc from '@tetherto/wdk-wallet-btc'
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm'
-import WalletManagerSpark, {LightningSendRequest, WalletAccountSpark} from '@tetherto/wdk-wallet-spark'
+import WalletManagerSpark, { type LightningSendRequest, type WalletAccountSpark } from '@tetherto/wdk-wallet-spark'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -328,18 +328,30 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
       // Poll until the Lightning payment settles
       console.log('Checking Lightning payment status...')
       while (true) {
-        const sendRequest : LightningSendRequest | null = await sparkAccount.getLightningSendRequest(payment.id)
+        const sendRequest: LightningSendRequest | null = await sparkAccount.getLightningSendRequest(payment.id)
         const status = sendRequest?.status
         console.log(`  Lightning payment status: ${status}`)
 
-        if (status === 'TRANSFER_COMPLETED' || status === 'LIGHTNING_PAYMENT_SUCCEEDED' || status === 'PREIMAGE_PROVIDED' || status === 'LIGHTNING_PAYMENT_INITIATED') {
+        if (
+          status === 'TRANSFER_COMPLETED' ||
+          status === 'LIGHTNING_PAYMENT_SUCCEEDED' ||
+          status === 'PREIMAGE_PROVIDED' ||
+          status === 'LIGHTNING_PAYMENT_INITIATED'
+        ) {
           break
         }
-        if (status === 'USER_SWAP_RETURNED' || status === 'USER_SWAP_RETURN_FAILED' || status === 'LIGHTNING_PAYMENT_FAILED' || status === 'TRANSFER_FAILED') {
+        if (
+          status === 'USER_SWAP_RETURNED' ||
+          status === 'USER_SWAP_RETURN_FAILED' ||
+          status === 'LIGHTNING_PAYMENT_FAILED' ||
+          status === 'TRANSFER_FAILED'
+        ) {
           console.error(`\nLightning payment failed:`)
           console.error(`  Status   : ${status}`)
           console.error(`  Invoice  : ${sendRequest?.encodedInvoice}`)
-          console.error(`  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`)
+          console.error(
+            `  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`,
+          )
           console.error(`  Updated  : ${sendRequest?.updatedAt}`)
           throw new Error(`Lightning payment failed (${status}). Funds should be returned to your Spark wallet.`)
         }
@@ -375,11 +387,18 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
       if (lightningPaymentId) {
         const sendRequest = await sparkAccount.getLightningSendRequest(lightningPaymentId)
         const lnStatus = sendRequest?.status
-        if (lnStatus === 'USER_SWAP_RETURNED' || lnStatus === 'USER_SWAP_RETURN_FAILED' || lnStatus === 'LIGHTNING_PAYMENT_FAILED' || lnStatus === 'TRANSFER_FAILED') {
+        if (
+          lnStatus === 'USER_SWAP_RETURNED' ||
+          lnStatus === 'USER_SWAP_RETURN_FAILED' ||
+          lnStatus === 'LIGHTNING_PAYMENT_FAILED' ||
+          lnStatus === 'TRANSFER_FAILED'
+        ) {
           console.error(`\nLightning payment failed:`)
           console.error(`  Status   : ${lnStatus}`)
           console.error(`  Invoice  : ${sendRequest?.encodedInvoice}`)
-          console.error(`  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`)
+          console.error(
+            `  Fee      : ${sendRequest?.fee?.originalValue ?? 'n/a'} ${sendRequest?.fee?.originalUnit ?? ''}`,
+          )
           console.error(`  Updated  : ${sendRequest?.updatedAt}`)
           console.error(`  SendRequest  : ${JSON.stringify(sendRequest)}`)
           throw new Error(`Lightning payment failed (${lnStatus}). Funds should be returned to your Spark wallet.`)
@@ -488,11 +507,11 @@ async function main() {
         process.exitCode = 1
     }
   } finally {
-      try {
-          wdk.dispose()
-      } catch (err) {
-          console.error(`Failed to dispose: ${err}`)
-      }
+    try {
+      wdk.dispose()
+    } catch (err) {
+      console.error(`Failed to dispose: ${err}`)
+    }
   }
 }
 
