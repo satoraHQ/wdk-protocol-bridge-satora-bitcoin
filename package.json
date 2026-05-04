@@ -19,9 +19,9 @@
     "check:fix": "biome check --fix --unsafe ."
   },
   "dependencies": {
-    "@lendasat/lendaswap-sdk-pure": "^0.2.18",
-    "@tetherto/wdk-wallet": "^1.0.0-beta.7",
-    "bare-node-runtime": "^1.1.4"
+    "@lendasat/lendaswap-sdk-pure": "^0.2.25",
+    "@tetherto/wdk-wallet": "^1.0.0-beta.8",
+    "bare-node-runtime": "^1.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

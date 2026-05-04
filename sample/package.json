@@ -9,10 +9,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tetherto/wdk": "^1.0.0-beta.6",
-    "@tetherto/wdk-wallet-btc": "^1.0.0-beta.8",
-    "@tetherto/wdk-wallet-evm": "^1.0.0-beta.10",
-    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.13",
+    "@tetherto/wdk": "^1.0.0-beta.9",
+    "@tetherto/wdk-wallet-btc": "^1.0.0-beta.9",
+    "@tetherto/wdk-wallet-evm": "^1.0.0-beta.12",
+    "@tetherto/wdk-wallet-spark": "^1.0.0-beta.18",
     "@satora/wdk-protocol-bridge-satora-bitcoin": "file:.."
   },
   "devDependencies": {

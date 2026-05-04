@@ -188,13 +188,7 @@ async function cmdReceive(accounts: Accounts, chain: ChainName, amount?: string)
   }
 }
 
-async function cmdSend(
-  accounts: Accounts,
-  chain: ChainName,
-  to: string,
-  amount: string,
-  feeRate?: string,
-) {
+async function cmdSend(accounts: Accounts, chain: ChainName, to: string, amount: string, feeRate?: string) {
   const account = accounts[chain]
   const native = NATIVE[chain]
   const value = parseUnits(amount, native.decimals)

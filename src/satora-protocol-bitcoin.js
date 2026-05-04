@@ -24,6 +24,11 @@ import {
   isEvmToken
 } from '@lendasat/lendaswap-sdk-pure'
 
+/** @typedef {import('@lendasat/lendaswap-sdk-pure').BitcoinToEvmSwapResponse} BitcoinToEvmSwapResponse */
+/** @typedef {import('@lendasat/lendaswap-sdk-pure').EvmToBitcoinSwapResponse} EvmToBitcoinSwapResponse */
+/** @typedef {import('@lendasat/lendaswap-sdk-pure').LightningToEvmSwapResponse} LightningToEvmSwapResponse */
+/** @typedef {import('@lendasat/lendaswap-sdk-pure').EvmToLightningSwapResponse} EvmToLightningSwapResponse */
+
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccount} IWalletAccount */
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnly} IWalletAccountReadOnly */
 
@@ -172,7 +177,7 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
       .withSignerStorage(walletStorage)
       .withSwapStorage(swapStorage)
 
-    if (apiKey) builder.withApiKey(apiKey)
+    if (apiKey) builder.withOrgCode(apiKey)
     if (mnemonic) builder.withMnemonic(mnemonic)
 
     return builder.build()
@@ -295,15 +300,44 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
     }
 
     const result = await client.createSwap(swapOptions)
-    const response = result.response
 
+    const sourceIsLightning = source.chain === 'lightning'
+    const sourceIsBtcOnchain = source.chain === 'bitcoin'
+    const sourceIsEvm = isEvmToken(source.chain)
+    const targetIsLightning = target.chain === 'lightning'
+    const targetIsBtcOnchain = target.chain === 'bitcoin'
+
+    /** @type {string | undefined} */
+    let depositAddress
+    /** @type {string | undefined} */
+    let lightningInvoice
+    /** @type {string | undefined} */
+    let evmHtlcAddress
+
+    if (sourceIsBtcOnchain) {
+      const response = /** @type {BitcoinToEvmSwapResponse} */ (result.response)
+      depositAddress = response.btc_htlc_address
+    } else if (sourceIsLightning) {
+      const response = /** @type {LightningToEvmSwapResponse} */ (result.response)
+      lightningInvoice = response.bolt11_invoice
+    } else if (sourceIsEvm && targetIsBtcOnchain) {
+      const response = /** @type {EvmToBitcoinSwapResponse} */ (result.response)
+      evmHtlcAddress = response.evm_htlc_address
+    } else if (sourceIsEvm && targetIsLightning) {
+      const response = /** @type {EvmToLightningSwapResponse} */ (result.response)
+      evmHtlcAddress = response.evm_htlc_address
+    } else {
+      throw new Error(`Unsupported swap direction: ${source.chain} -> ${target.chain}`)
+    }
+
+    const response = result.response
     return {
       hash: response.id,
       fee: BigInt(response.fee_sats || 0),
       bridgeFee: BigInt(response.fee_sats || 0),
-      depositAddress: response.btc_htlc_address || undefined,
-      lightningInvoice: response.bolt11_invoice || response.lightning_invoice || undefined,
-      evmHtlcAddress: response.evm_htlc_address || undefined,
+      depositAddress,
+      lightningInvoice,
+      evmHtlcAddress,
       depositAmount: BigInt(response.source_amount),
       targetAmount: response.target_amount
     }
