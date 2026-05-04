@@ -2,7 +2,13 @@
   "name": "@satora/wdk-protocol-bridge-satora-bitcoin",
   "version": "1.0.0-beta.1",
   "description": "WDK module to make bitcoin BIP-32 wallets interact with the satora bridge protocol.",
-  "keywords": ["wdk", "protocol", "bridge", "satora", "bitcoin"],
+  "keywords": [
+    "wdk",
+    "protocol",
+    "bridge",
+    "satora",
+    "bitcoin"
+  ],
   "author": "bonomat &lt;philipp@lendasat.com&gt;",
   "license": "Apache-2.0",
   "main": "index.js",
@@ -21,7 +27,8 @@
   "dependencies": {
     "@lendasat/lendaswap-sdk-pure": "^0.2.25",
     "@tetherto/wdk-wallet": "^1.0.0-beta.8",
-    "bare-node-runtime": "^1.3.1"
+    "bare-node-runtime": "^1.3.1",
+    "tslib": "^2.8.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

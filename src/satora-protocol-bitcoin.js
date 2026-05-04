@@ -301,11 +301,11 @@ export default class SatoraProtocolBitcoin extends BridgeProtocol {
 
     const result = await client.createSwap(swapOptions)
 
-    const sourceIsLightning = source.chain === 'lightning'
-    const sourceIsBtcOnchain = source.chain === 'bitcoin'
-    const sourceIsEvm = isEvmToken(source.chain)
-    const targetIsLightning = target.chain === 'lightning'
-    const targetIsBtcOnchain = target.chain === 'bitcoin'
+    const sourceIsLightning = source.chain.toLowerCase() === 'lightning'
+    const sourceIsBtcOnchain = source.chain.toLowerCase() === 'bitcoin'
+    const sourceIsEvm = isEvmToken(source.chain.toLowerCase())
+    const targetIsLightning = target.chain.toLowerCase() === 'lightning'
+    const targetIsBtcOnchain = target.chain.toLowerCase() === 'bitcoin'
 
     /** @type {string | undefined} */
     let depositAddress
