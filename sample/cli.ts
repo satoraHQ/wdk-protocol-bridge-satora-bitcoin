@@ -68,14 +68,22 @@ async function initWdk(seed: string) {
       network: 'MAINNET',
     })
 
-  const accounts: Record<ChainName, IWalletAccountWithProtocols> = {
+  const sparkAccount = (await wdk.getAccount('spark', 0)) as unknown as WalletAccountSpark
+  const accounts: Accounts = {
     Bitcoin: await wdk.getAccount('bitcoin', 0),
     Arbitrum: await wdk.getAccount('arbitrum', 0),
-    Spark: await wdk.getAccount('spark', 0),
-    Lightning: await wdk.getAccount('spark', 0),
+    Spark: sparkAccount,
+    Lightning: sparkAccount,
   }
 
   return { wdk, accounts }
+}
+
+type Accounts = {
+  Bitcoin: IWalletAccountWithProtocols
+  Arbitrum: IWalletAccountWithProtocols
+  Spark: WalletAccountSpark
+  Lightning: WalletAccountSpark
 }
 
 function resolveChain(name: string): ChainName {
@@ -145,7 +153,7 @@ function getTokenAddress(chain: ChainName, tokenKey: string): string {
 // Commands
 // ---------------------------------------------------------------------------
 
-async function cmdBalance(accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, asset: string) {
+async function cmdBalance(accounts: Accounts, chain: ChainName, asset: string) {
   const account = accounts[chain]
   const native = NATIVE[chain]
   const assetLower = asset.toLowerCase()
@@ -166,23 +174,22 @@ async function cmdBalance(accounts: Record<ChainName, IWalletAccountWithProtocol
   }
 }
 
-async function cmdReceive(accounts: Record<ChainName, IWalletAccountWithProtocols>, chain: ChainName, amount?: string) {
+async function cmdReceive(accounts: Accounts, chain: ChainName, amount?: string) {
   const account = accounts[chain]
   const address = await account.getAddress()
   console.log(`${chain}: ${address}`)
 
   if ((chain === 'Spark' || chain === 'Lightning') && amount) {
     const sats = Number(amount)
-    const sparkAccount = account as any
-    const result = await sparkAccount.createLightningInvoice({ amountSats: sats })
+    const result = await accounts.Spark.createLightningInvoice({ amountSats: sats })
     console.log()
     console.log(`Lightning invoice (${sats} sats):`)
-    console.log(result.invoice?.encodedInvoice ?? result.encodedInvoice ?? JSON.stringify(result, null, 2))
+    console.log(result.invoice?.encodedInvoice ?? JSON.stringify(result, null, 2))
   }
 }
 
 async function cmdSend(
-  accounts: Record<ChainName, IWalletAccountWithProtocols>,
+  accounts: Accounts,
   chain: ChainName,
   to: string,
   amount: string,
@@ -201,15 +208,18 @@ async function cmdSend(
       value: Number(value),
       ...(feeRate ? { feeRate: Number(feeRate) } : {}),
     })
+  } else if (chain === 'Spark' || chain === 'Lightning') {
+    result = await accounts.Spark.sendTransaction({ to, value: Number(value) })
   } else {
     result = await account.sendTransaction({ to, value })
   }
 
+  const feeUnit = chain === 'Bitcoin' || chain === 'Spark' || chain === 'Lightning' ? 'sats' : 'wei'
   console.log(`TX: ${result.hash}`)
-  console.log(`Fee: ${result.fee.toString()} ${chain === 'Bitcoin' ? 'sats' : 'wei'}`)
+  console.log(`Fee: ${result.fee.toString()} ${feeUnit}`)
 }
 
-async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>, flags: Record<string, string>) {
+async function cmdSwap(accounts: Accounts, flags: Record<string, string>) {
   if (!flags.source || !flags.target) {
     throw new Error('Required: --source <chain:token> --target <chain:token> and --source-amount or --target-amount')
   }
@@ -242,8 +252,7 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
     // For Spark targets, create a Lightning invoice so the swap pays into Spark
     let recipientAddress: string
     if (tgt.chain === 'Spark' && targetAmount) {
-      const sparkAccount = accounts.Spark as unknown as WalletAccountSpark
-      const invoice = await sparkAccount.createLightningInvoice({ amountSats: targetAmount })
+      const invoice = await accounts.Spark.createLightningInvoice({ amountSats: targetAmount })
       recipientAddress = invoice.invoice.encodedInvoice
       console.log(`Created Lightning invoice for ${targetAmount} sats`)
     } else if (tgt.chain === 'Spark' && sourceAmount) {
@@ -314,7 +323,7 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
     console.log(`Source chain: ${bridgeOptions.sourceChain}, ${isLightning({ chain: bridgeOptions.sourceChain })}`)
 
     let lightningPaymentId: string | undefined
-    const sparkAccount = accounts.Spark as unknown as WalletAccountSpark
+    const sparkAccount = accounts.Spark
 
     if (isLightning({ chain: bridgeOptions.sourceChain }) && satoraBridgeResult.lightningInvoice) {
       console.log('Funding swap...')
@@ -418,9 +427,8 @@ async function cmdSwap(accounts: Record<ChainName, IWalletAccountWithProtocols>,
   }
 }
 
-async function cmdPaymentStatus(accounts: Record<ChainName, IWalletAccountWithProtocols>, paymentId: string) {
-  const account = accounts.Spark as unknown as WalletAccountSpark
-  const sendRequest = await account.getLightningSendRequest(paymentId)
+async function cmdPaymentStatus(accounts: Accounts, paymentId: string) {
+  const sendRequest = await accounts.Spark.getLightningSendRequest(paymentId)
   if (sendRequest) {
     console.log('Payment status:', sendRequest.status)
   } else {
@@ -448,6 +456,7 @@ Examples:
   cli balance Spark btc
   cli balance Arbitrum usdt0
   cli send Bitcoin bc1q... 0.001 2
+  cli send Spark sp1p... 0.0001
   cli receive Spark
   cli receive Spark 10000
   cli swap --source Bitcoin:btc --target Arbitrum:usdt --source-amount 0.001
