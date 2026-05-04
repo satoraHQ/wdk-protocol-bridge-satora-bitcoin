@@ -61,7 +61,7 @@ async function initWdk(seed: string) {
     .registerWallet('bitcoin', WalletManagerBtc as any, {
       client: { type: 'electrum', clientConfig: { host: 'blockstream.info', port: 700, protocol: 'ssl' } },
     })
-    .registerWallet('arbitrum', WalletManagerEvm, {
+    .registerWallet('arbitrum', WalletManagerEvm as any, {
       provider: 'https://arb1.arbitrum.io/rpc',
     })
     .registerWallet('spark', WalletManagerSpark as any, {
