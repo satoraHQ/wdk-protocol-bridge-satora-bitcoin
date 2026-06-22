@@ -15,6 +15,9 @@
 'use strict'
 
 import { SwidgeProtocol } from '@tetherto/wdk-wallet/protocols'
+import { Client } from '@satora/swap'
+
+import { toSupportedChain } from './chains.js'
 
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccount} IWalletAccount */
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnly} IWalletAccountReadOnly */
@@ -29,9 +32,13 @@ import { SwidgeProtocol } from '@tetherto/wdk-wallet/protocols'
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedToken} SwidgeSupportedToken */
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedTokensOptions} SwidgeSupportedTokensOptions */
 
+/** @typedef {import('@satora/swap').Client} SatoraClient */
+
 /**
  * @typedef {Object} SatoraProtocolConfig
  * @property {number} [defaultSlippage] - The default slippage tolerance as a decimal (e.g., 0.01 for 1%).
+ * @property {string} [baseUrl] - Override the satora API base URL. Defaults to the SDK's production endpoint.
+ * @property {string} [mnemonic] - BIP39 mnemonic for the SDK's Bitcoin/Arkade HD wallet. Not required for read-only operations (chains, tokens, quotes).
  */
 
 export default class SatoraProtocol extends SwidgeProtocol {
@@ -68,6 +75,32 @@ export default class SatoraProtocol extends SwidgeProtocol {
      * @type {SatoraProtocolConfig}
      */
     this._config = config
+
+    /**
+     * The lazily-constructed satora swap client.
+     *
+     * @private
+     * @type {Promise<SatoraClient> | undefined}
+     */
+    this._clientPromise = undefined
+  }
+
+  /**
+   * Lazily constructs (and memoizes) the underlying satora swap client.
+   * Read-only operations build a stateless client; a mnemonic is only
+   * required for fund-moving operations.
+   *
+   * @protected
+   * @returns {Promise<SatoraClient>} The satora swap client.
+   */
+  async _getClient () {
+    if (!this._clientPromise) {
+      let builder = Client.builder()
+      if (this._config.baseUrl) builder = builder.withBaseUrl(this._config.baseUrl)
+      if (this._config.mnemonic) builder = builder.withMnemonic(this._config.mnemonic)
+      this._clientPromise = builder.build()
+    }
+    return this._clientPromise
   }
 
   /**
@@ -111,7 +144,17 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @returns {Promise<SwidgeSupportedChain[]>} The supported chains.
    */
   async getSupportedChains () {
-    // TODO: Implement protocol-specific supported chains fetching
+    const client = await this._getClient()
+    const { pairs } = await client.getSwapPairs()
+
+    const chains = new Map()
+    for (const { source, target } of pairs) {
+      for (const sdkChain of [source, target]) {
+        if (!chains.has(sdkChain)) chains.set(sdkChain, toSupportedChain(sdkChain))
+      }
+    }
+
+    return [...chains.values()]
   }
 
   /**
