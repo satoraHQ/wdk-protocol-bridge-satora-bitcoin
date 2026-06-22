@@ -64,8 +64,26 @@ async function chains (flags) {
   }
 }
 
+async function tokens (flags) {
+  const protocol = createProtocol(flags)
+  const options = {}
+  if (flags['from-chain'] !== undefined) options.fromChain = flags['from-chain']
+  if (flags['to-chain'] !== undefined) options.toChain = flags['to-chain']
+
+  const supported = await protocol.getSupportedTokens(options)
+
+  console.log(`Supported tokens (${supported.length}):\n`)
+  for (const token of supported) {
+    const address = token.address ? `  ${token.address}` : ''
+    console.log(
+      `  ${String(token.chain).padEnd(10)} ${token.symbol.padEnd(8)} decimals: ${String(token.decimals).padEnd(4)} ${token.name}${address}`
+    )
+  }
+}
+
 const COMMANDS = {
-  chains
+  chains,
+  tokens
 }
 
 function usage () {
@@ -76,10 +94,13 @@ Usage:
 
 Commands:
   chains            List the chains supported by the satora protocol
+  tokens            List the tokens supported by the satora protocol
 
 Options:
   --base-url <url>  Override the satora API base URL (or set SATORA_BASE_URL).
-                    Defaults to the SDK's production endpoint.`)
+                    Defaults to the SDK's production endpoint.
+  --from-chain <id> Filter tokens by source chain (tokens command).
+  --to-chain <id>   Filter tokens by destination chain (tokens command).`)
 }
 
 async function main () {

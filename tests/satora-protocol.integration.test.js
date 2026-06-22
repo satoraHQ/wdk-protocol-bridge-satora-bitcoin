@@ -54,4 +54,41 @@ describe('SatoraProtocol (integration)', { skip }, () => {
       assert.ok(ids.includes('Bitcoin'), 'Bitcoin is supported')
     })
   })
+
+  describe('getSupportedTokens', () => {
+    it('returns the live set of supported tokens', async () => {
+      const protocol = new SatoraProtocol(undefined, config)
+
+      const tokens = await protocol.getSupportedTokens()
+
+      assert.ok(Array.isArray(tokens), 'tokens is an array')
+      assert.ok(tokens.length > 0, 'at least one token is returned')
+
+      for (const token of tokens) {
+        assert.equal(typeof token.token, 'string')
+        assert.notEqual(token.chain, undefined, 'token has a chain')
+        assert.equal(typeof token.symbol, 'string')
+        assert.equal(typeof token.decimals, 'number')
+        // EVM tokens carry a contract address; BTC does not.
+        if (token.address !== undefined) {
+          assert.ok(token.address.startsWith('0x'), 'address is an EVM contract address')
+        }
+      }
+
+      // BTC must be discoverable.
+      assert.ok(tokens.some(t => t.token === 'btc'), 'BTC is supported')
+    })
+
+    it('filters tokens by chain', async () => {
+      const protocol = new SatoraProtocol(undefined, config)
+
+      const polygon = await protocol.getSupportedTokens({ toChain: 137 })
+
+      assert.ok(polygon.length > 0, 'at least one Polygon token')
+      assert.ok(
+        polygon.every(t => String(t.chain) === '137'),
+        'every returned token is on Polygon (137)'
+      )
+    })
+  })
 })

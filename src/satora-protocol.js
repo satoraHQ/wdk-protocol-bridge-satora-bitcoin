@@ -17,7 +17,8 @@
 import { SwidgeProtocol } from '@tetherto/wdk-wallet/protocols'
 import { Client } from '@satora/swap'
 
-import { toSupportedChain } from './chains.js'
+import { toChainId, toSupportedChain } from './chains.js'
+import { toSupportedToken } from './tokens.js'
 
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccount} IWalletAccount */
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnly} IWalletAccountReadOnly */
@@ -163,7 +164,23 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @param {SwidgeSupportedTokensOptions} [options] - Optional filters for chain- or route-scoped token discovery.
    * @returns {Promise<SwidgeSupportedToken[]>} The supported tokens.
    */
-  async getSupportedTokens (options) {
-    // TODO: Implement protocol-specific supported tokens fetching
+  async getSupportedTokens (options = {}) {
+    const client = await this._getClient()
+    const { btc_tokens: btcTokens, evm_tokens: evmTokens } = await client.getTokens()
+
+    const tokens = [...btcTokens, ...evmTokens].map(toSupportedToken)
+
+    // Route-scoped discovery (best effort): satora's token catalogue is not
+    // route-aware, so when fromChain/toChain are supplied we narrow the result
+    // to tokens on those chains. fromToken cannot be applied with the available
+    // API and is ignored.
+    const chainFilter = [options.fromChain, options.toChain]
+      .filter(chain => chain !== undefined && chain !== null)
+      .map(chain => String(toChainId(chain)))
+
+    if (chainFilter.length === 0) return tokens
+
+    const allowed = new Set(chainFilter)
+    return tokens.filter(token => allowed.has(String(token.chain)))
   }
 }
