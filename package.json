@@ -2,7 +2,12 @@
   "name": "@satora/wdk-protocol-swidge-satora",
   "version": "1.0.0-beta.1",
   "description": "WDK module to perform cross-chain swaps via the satora protocol.",
-  "keywords": ["wdk", "protocol", "swidge", "satora"],
+  "keywords": [
+    "wdk",
+    "protocol",
+    "swidge",
+    "satora"
+  ],
   "author": "bonomat &lt;philipp@lendasat.com&gt;",
   "license": "Apache-2.0",
   "main": "index.js",
@@ -13,9 +18,18 @@
     "lint": "standard",
     "lint:fix": "standard --fix",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
-    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage"
+    "test:integration": "node --test tests/*.integration.test.js",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "example": "node examples/satora-cli.js"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.integration\\.test\\.js$"
+    ]
   },
   "dependencies": {
+    "@satora/swap": "^0.0.3",
     "@tetherto/wdk-wallet": "^1.0.0-beta.2",
     "bare-node-runtime": "^1.1.4"
   },

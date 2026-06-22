@@ -1,6 +1,22 @@
 import { beforeEach, describe, expect, jest, test } from '@jest/globals'
 
-import SatoraProtocol from '../index.js'
+// Mock the satora swap client so the unit tests stay fast and isolated and do
+// not load its ESM-only dependency graph (exercised for real by the Node-based
+// integration tests). Must be registered before importing the module.
+jest.unstable_mockModule('@satora/swap', () => ({
+  Client: {
+    builder: () => {
+      const builder = {
+        withBaseUrl: () => builder,
+        withMnemonic: () => builder,
+        build: async () => ({})
+      }
+      return builder
+    }
+  }
+}))
+
+const { default: SatoraProtocol } = await import('../index.js')
 
 describe('SatoraProtocol', () => {
   let account,
