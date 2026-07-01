@@ -3,3 +3,9 @@ coverage
 .DS_Store
 .idea
 
+# Local secrets and example databases
+.env
+.env.*
+!.env*.example
+*.db
+
