@@ -125,6 +125,9 @@ Usage:
 
 Commands:
   address           Show the Arkade wallet address and balance (fund this before swapping)
+  send              Send BTC out via Arkade:
+                      --to <arkade-address>   destination Arkade address
+                      --amount <btc>          amount to send, in BTC (e.g. 0.0001)
   swap              Perform an Arkade -> EVM swap:
                       --to <chain:token>      destination token (e.g. 42161:0xfd08...)
                       --recipient <address>   EVM address to receive the tokens
@@ -160,6 +163,22 @@ async function main () {
     console.log('Balance:      ', await account.getBalance(), 'sats')
 
     process.exit(0)
+  }
+
+  if (command === 'send') {
+    if (!flags.to || flags.amount === undefined || flags.amount === true) {
+      console.error('send requires: --to <arkade-address> --amount <btc-amount>')
+      process.exit(1)
+    }
+
+    const amountSats = BigInt(Math.round(Number(flags.amount) * 1e8))
+    console.log('Arkade wallet:', await account.getAddress())
+    console.log(`Sending ${flags.amount} BTC to ${flags.to} ...`)
+
+    const { hash } = await account.sendTransaction({ to: flags.to, value: amountSats })
+    console.log('Sent. txid:', hash)
+
+    return
   }
 
   if (command !== 'swap') {
