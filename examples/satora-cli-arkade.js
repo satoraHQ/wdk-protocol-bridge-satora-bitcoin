@@ -38,6 +38,9 @@
 //     --to 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
 //     --recipient 0xYourEvmAddress \
 //     --amount 0.0001
+//
+//   # 3. check a swap's status by id
+//   node --env-file=examples/.env examples/satora-cli-arkade.js status <swap-id>
 
 import {
   EsploraProvider,
@@ -148,6 +151,7 @@ Commands:
                       --to <chain:token>      destination token (e.g. 42161:0xfd08...)
                       --recipient <address>   EVM address to receive the tokens
                       --amount <btc>          amount to send, in BTC (e.g. 0.0001)
+  status <swap-id>  Show the status of a swap by id
 
 Config comes from examples/.env (copy from examples/.env.example).`)
 }
@@ -162,7 +166,7 @@ async function main () {
     process.exit(command && command !== 'help' ? 1 : 0)
   }
 
-  // Both `address` and `swap` need the wallet.
+  // Every command needs the seed.
   const mnemonic = requireEnv('SATORA_MNEMONIC')
   if (!validateMnemonic(mnemonic, wordlist)) {
     throw new Error('SATORA_MNEMONIC is not a valid BIP-39 mnemonic')
@@ -172,6 +176,35 @@ async function main () {
   const esploraUrl = process.env.SATORA_ESPLORA || 'https://mempool.space/api'
   const dbPath = process.env.SATORA_DB || './.satora.db'
 
+  // `status` is read-only — look up a swap by id, no Arkade wallet needed.
+  if (command === 'status') {
+    const swapId = argv[1] && !argv[1].startsWith('--') ? argv[1] : undefined
+    if (!swapId) {
+      console.error('status requires a swap id: status <swap-id>')
+      process.exit(1)
+    }
+
+    const { signerStorage, swapStorage } = await createStorage(dbPath)
+    const statusProtocol = new SatoraProtocol(undefined, {
+      mnemonic,
+      arkadeServerUrl,
+      esploraUrl,
+      ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
+      signerStorage,
+      swapStorage
+    })
+
+    const { status, transactions } = await statusProtocol.getSwidgeStatus(swapId)
+    console.log('swap id:', swapId)
+    console.log('status: ', status)
+    for (const tx of transactions ?? []) {
+      console.log(`  ${tx.type} tx${tx.chain ? ` (${tx.chain})` : ''}: ${tx.hash}`)
+    }
+
+    process.exit(0)
+  }
+
+  // The address/send/swap commands fund or read the Arkade wallet.
   const account = await buildArkadeAccount(mnemonic, { arkadeServerUrl, esploraUrl })
 
   if (command === 'address' || command === 'balance') {
