@@ -259,11 +259,54 @@ describe('SatoraProtocol', () => {
   })
 
   describe('getSwidgeStatus', () => {
-    test.todo('should successfully return the status of an operation')
+    test('maps a settled swap to completed with source/destination transactions', async () => {
+      mockClient.getSwap.mockResolvedValue({
+        status: 'serverredeemed',
+        btc_fund_txid: 'btcfund',
+        evm_claim_txid: '0xevmclaim',
+        evm_chain_id: 42161
+      })
 
-    test.todo('should successfully return the status of an operation by filtering the source and target chain')
+      const result = await protocol.getSwidgeStatus('swap-1')
 
-    test.todo('should throw if no operation exists for the given id')
+      expect(mockClient.getSwap).toHaveBeenCalledWith('swap-1')
+      expect(result).toEqual({
+        status: 'completed',
+        transactions: [
+          { hash: 'btcfund', type: 'source' },
+          { hash: '0xevmclaim', chain: 42161, type: 'destination' }
+        ]
+      })
+    })
+
+    test('maps in-flight and failure statuses, omitting absent transactions', async () => {
+      const cases = [
+        ['clientfunded', 'pending'],
+        ['serverfunded', 'action-required'],
+        ['clientredeemed', 'completed'],
+        ['clientrefunded', 'refunded'],
+        ['expired', 'expired'],
+        ['serverwontfund', 'failed'],
+        ['clientredeemedandclientrefunded', 'partial']
+      ]
+
+      for (const [swapStatus, swidgeStatus] of cases) {
+        mockClient.getSwap.mockResolvedValue({ status: swapStatus })
+        const result = await protocol.getSwidgeStatus('swap-1')
+        expect(result).toEqual({ status: swidgeStatus })
+      }
+    })
+
+    test('falls back to pending for an unknown status', async () => {
+      mockClient.getSwap.mockResolvedValue({ status: 'somethingnew' })
+      const result = await protocol.getSwidgeStatus('swap-1')
+      expect(result).toEqual({ status: 'pending' })
+    })
+
+    test('propagates the error when no swap exists for the id', async () => {
+      mockClient.getSwap.mockRejectedValue(new Error('swap not found'))
+      await expect(protocol.getSwidgeStatus('nope')).rejects.toThrow('swap not found')
+    })
   })
 
   describe('getSupportedChains', () => {

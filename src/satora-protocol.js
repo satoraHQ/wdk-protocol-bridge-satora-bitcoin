@@ -325,7 +325,14 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @throws {Error} If the id is invalid, or no swidge exists with the given identifier.
    */
   async getSwidgeStatus (id, options) {
-    // TODO: Implement protocol-specific swidge status fetching
+    const client = await this._getClient()
+    const swap = await client.getSwap(id)
+
+    const result = { status: toSwidgeStatus(swap.status) }
+    const transactions = toSwidgeTransactions(swap)
+    if (transactions.length > 0) result.transactions = transactions
+
+    return result
   }
 
   /**
@@ -387,6 +394,53 @@ const SERVER_FUNDED_STATES = ['serverfunded']
 const FUND_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'serverwontfund', 'clientfundedtoolate', 'clientinvalidfunded', 'clientredeemedandclientrefunded']
 const TERMINAL_SUCCESS_STATES = ['serverredeemed', 'clientredeemed']
 const TERMINAL_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'clientrefundedserverfunded', 'clientrefundedserverrefunded', 'clientredeemedandclientrefunded']
+
+// Maps the satora SwapStatus state machine onto the WDK SwidgeStatus vocabulary.
+const SWAP_STATUS_TO_SWIDGE = {
+  pending: 'pending',
+  clientfundingseen: 'pending',
+  clientfunded: 'pending',
+  serverfunded: 'action-required', // destination locked; the client must claim to receive
+  clientredeeming: 'pending',
+  clientredeemed: 'completed',
+  serverredeemed: 'completed',
+  clientrefunded: 'refunded',
+  clientfundedserverrefunded: 'refunded',
+  clientrefundedserverfunded: 'refunded',
+  clientrefundedserverrefunded: 'refunded',
+  expired: 'expired',
+  clientinvalidfunded: 'action-required', // client needs to refund
+  clientfundedtoolate: 'action-required', // client needs to refund
+  serverwontfund: 'failed',
+  clientredeemedandclientrefunded: 'completed'
+}
+
+/**
+ * Maps a satora swap status to a WDK swidge status. Unknown statuses fall back
+ * to 'pending' so an in-flight swap is never misreported as terminal.
+ *
+ * @param {string} status - The satora swap status.
+ * @returns {import('@tetherto/wdk-wallet/protocols').SwidgeStatus} The WDK swidge status.
+ */
+function toSwidgeStatus (status) {
+  return SWAP_STATUS_TO_SWIDGE[status] ?? 'pending'
+}
+
+/**
+ * Extracts the on-chain transactions from a satora swap, best effort. Only the
+ * fields present on the swap (which vary by direction) are reported.
+ *
+ * @param {Object} swap - The satora swap (GetSwapResponse).
+ * @returns {import('@tetherto/wdk-wallet/protocols').SwidgeTransaction[]} The transactions.
+ */
+function toSwidgeTransactions (swap) {
+  const transactions = []
+  if (swap.btc_fund_txid) transactions.push({ hash: swap.btc_fund_txid, type: 'source' })
+  if (swap.evm_claim_txid) {
+    transactions.push({ hash: swap.evm_claim_txid, chain: swap.evm_chain_id, type: 'destination' })
+  }
+  return transactions
+}
 
 /**
  * Resolves after `ms` milliseconds.
