@@ -45,6 +45,7 @@ import { SatoraInvalidOptionsError } from './errors.js'
  * @property {string} [esploraUrl] - Override the Esplora (Bitcoin) API URL.
  * @property {Object} [signerStorage] - A satora `WalletStorage` adapter persisting the seed / key index (the swap client's database). Recommended for fund-moving operations so an interrupted swap survives a restart. Omit for in-memory (not recoverable across restarts).
  * @property {Object} [swapStorage] - A satora `SwapStorage` adapter persisting per-swap state for recovery/refund.
+ * @property {(string | number)[]} [accountChains] - The chains the provided wallet account can fund/operate on (e.g. ['Arkade'] for an Arkade wallet, or [1, 137, 42161] for an EVM wallet). When set, `swidge` validates that the source chain is one of these.
  */
 
 export default class SatoraProtocol extends SwidgeProtocol {
@@ -217,6 +218,18 @@ export default class SatoraProtocol extends SwidgeProtocol {
       throw new SatoraInvalidOptionsError('Arkade -> EVM swidge requires fromTokenAmount (exact-in)')
     }
 
+    // The account funds the source side, so it must operate on the source chain.
+    // WDK accounts expose no chain id, so the caller declares the account's
+    // chains via config.accountChains; when set, the source chain must be one.
+    if (this._config.accountChains) {
+      const supported = new Set(this._config.accountChains.map(chain => String(chain)))
+      if (!supported.has(String(source.chain))) {
+        throw new SatoraInvalidOptionsError(
+          `the account does not support the source chain "${source.chain}" (accountChains: ${this._config.accountChains.join(', ')})`
+        )
+      }
+    }
+
     const client = await this._getClient()
 
     // 1. Create the swap. The server returns the VHTLC to fund and the exact
@@ -370,7 +383,7 @@ const FEE_CHAIN = 'Bitcoin'
 
 // Swap status groupings for driving the Arkade -> EVM flow (satora SwapStatus
 // state machine).
-const SERVER_FUNDED_STATES = ['serverfunded', 'clientredeeming', 'clientredeemed', 'serverredeemed']
+const SERVER_FUNDED_STATES = ['serverfunded']
 const FUND_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'serverwontfund', 'clientfundedtoolate', 'clientinvalidfunded', 'clientredeemedandclientrefunded']
 const TERMINAL_SUCCESS_STATES = ['serverredeemed', 'clientredeemed']
 const TERMINAL_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'clientrefundedserverfunded', 'clientrefundedserverrefunded', 'clientredeemedandclientrefunded']

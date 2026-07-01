@@ -166,7 +166,7 @@ describe('SatoraProtocol', () => {
         getAddress: jest.fn().mockResolvedValue('ark1qsource'),
         sendTransaction: jest.fn().mockResolvedValue({ hash: '0xfundtx', fee: 100n })
       }
-      protocol = new SatoraProtocol(account)
+      protocol = new SatoraProtocol(account, { accountChains: ['Arkade'] })
 
       mockClient.createArkadeToEvmSwapGeneric.mockResolvedValue(createResponse)
       mockClient.claim.mockResolvedValue({ success: true, message: 'ok', txHash: '0xclaimtx' })
@@ -225,6 +225,23 @@ describe('SatoraProtocol', () => {
       await expect(
         protocol.swidge({ fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n })
       ).rejects.toThrow(SatoraInvalidOptionsError)
+    })
+
+    test('throws if the source chain is not in accountChains', async () => {
+      // An account declared as EVM-only cannot fund an Arkade-sourced swap.
+      const evmOnly = new SatoraProtocol(account, { accountChains: [1, 137, 42161] })
+      await expect(
+        evmOnly.swidge({ fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n, recipient: '0xR' })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.createArkadeToEvmSwapGeneric).not.toHaveBeenCalled()
+    })
+
+    test('skips the source-chain check when accountChains is not set', async () => {
+      const noDecl = new SatoraProtocol(account)
+      const result = await noDecl.swidge({
+        fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n, recipient: '0xR'
+      })
+      expect(result.id).toBe('swap-1')
     })
 
     test('throws for an unsupported direction (EVM source)', async () => {
