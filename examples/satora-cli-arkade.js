@@ -52,7 +52,6 @@ import { HDKey } from '@scure/bip32'
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { EventSource } from 'eventsource'
-import { SqliteSwapStorage, SqliteWalletStorage } from '@satora/swap/node'
 
 import SatoraProtocol from '../index.js'
 
@@ -79,6 +78,23 @@ function requireEnv (name) {
   const value = process.env[name]
   if (!value) throw new Error(`missing required env var ${name} (see examples/.env.example)`)
   return value
+}
+
+// Persistent SQLite storage (via the native better-sqlite3 addon). A durable
+// database is REQUIRED: it holds the swap secret/state so an interrupted swap
+// can be recovered/refunded. If it isn't available, fail loudly rather than
+// risk funds with ephemeral in-memory storage.
+async function createStorage (dbPath) {
+  try {
+    const { SqliteWalletStorage, SqliteSwapStorage } = await import('@satora/swap/node')
+    return { signerStorage: new SqliteWalletStorage(dbPath), swapStorage: new SqliteSwapStorage(dbPath) }
+  } catch (err) {
+    throw new Error(
+      `persistent SQLite storage is unavailable (${err.message.split('\n')[0]}). ` +
+      'It is required so an interrupted swap can be recovered — refusing to run with ephemeral storage. ' +
+      'Build the native addon with: (cd node_modules/better-sqlite3 && npx node-gyp rebuild)'
+    )
+  }
 }
 
 /**
@@ -195,13 +211,15 @@ async function main () {
   console.log('Arkade wallet:', await account.getAddress())
   console.log('Balance:      ', await account.getBalance(), 'sats')
 
+  const { signerStorage, swapStorage } = await createStorage(dbPath)
   const protocol = new SatoraProtocol(account, {
     mnemonic,
     arkadeServerUrl,
     esploraUrl,
+    accountChains: ['Arkade'], // this account is an Arkade wallet
     ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
-    signerStorage: new SqliteWalletStorage(dbPath),
-    swapStorage: new SqliteSwapStorage(dbPath)
+    signerStorage,
+    swapStorage
   })
 
   // --amount is BTC; convert to sats.
