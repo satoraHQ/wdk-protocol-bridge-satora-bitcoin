@@ -10,7 +10,10 @@ import { SatoraInvalidOptionsError } from '../src/errors.js'
 const mockClient = {
   getSwapPairs: jest.fn(),
   getTokens: jest.fn(),
-  getQuote: jest.fn()
+  getQuote: jest.fn(),
+  createArkadeToEvmSwapGeneric: jest.fn(),
+  getSwap: jest.fn(),
+  claim: jest.fn()
 }
 
 jest.unstable_mockModule('@satora/swap', () => ({
@@ -19,6 +22,10 @@ jest.unstable_mockModule('@satora/swap', () => ({
       const builder = {
         withBaseUrl: () => builder,
         withMnemonic: () => builder,
+        withArkadeServerUrl: () => builder,
+        withEsploraUrl: () => builder,
+        withSignerStorage: () => builder,
+        withSwapStorage: () => builder,
         build: async () => mockClient
       }
       return builder
@@ -35,6 +42,9 @@ describe('SatoraProtocol', () => {
     mockClient.getSwapPairs.mockReset()
     mockClient.getTokens.mockReset()
     mockClient.getQuote.mockReset()
+    mockClient.createArkadeToEvmSwapGeneric.mockReset()
+    mockClient.getSwap.mockReset()
+    mockClient.claim.mockReset()
 
     // Discovery methods do not require an account.
     protocol = new SatoraProtocol()
@@ -138,15 +148,97 @@ describe('SatoraProtocol', () => {
   })
 
   describe('swidge', () => {
-    test.todo('should successfully perform a swidge operation (exact-in)')
+    let account
 
-    test.todo('should successfully perform a swidge operation (exact-out)')
+    const createResponse = {
+      response: {
+        id: 'swap-1',
+        btc_vhtlc_address: 'ark1qvhtlc',
+        source_amount: '100000',
+        target_amount: '58000000',
+        fee_sats: 250,
+        evm_claim_txid: null
+      }
+    }
 
-    test.todo('should throw if the swidge fees exceed the max network fee configuration')
+    beforeEach(() => {
+      account = {
+        getAddress: jest.fn().mockResolvedValue('ark1qsource'),
+        sendTransaction: jest.fn().mockResolvedValue({ hash: '0xfundtx', fee: 100n })
+      }
+      protocol = new SatoraProtocol(account)
 
-    test.todo('should throw if the swidge fees exceed the max protocol fee configuration')
+      mockClient.createArkadeToEvmSwapGeneric.mockResolvedValue(createResponse)
+      mockClient.claim.mockResolvedValue({ success: true, message: 'ok', txHash: '0xclaimtx' })
+      mockClient.getSwap
+        .mockResolvedValueOnce({ status: 'serverfunded', evm_claim_txid: null })
+        .mockResolvedValueOnce({ status: 'serverredeemed', evm_claim_txid: '0xevmclaim' })
+        .mockResolvedValue({ status: 'serverredeemed', evm_claim_txid: '0xevmclaim' })
+    })
 
-    test.todo('should throw if the account is read-only')
+    test('drives an Arkade -> EVM swap end to end (create, fund, claim)', async () => {
+      const result = await protocol.swidge({
+        fromToken: 'Arkade:btc',
+        toToken: '42161:0xusdt0',
+        fromTokenAmount: 100000n,
+        recipient: '0xRecipient'
+      })
+
+      // Create with the parsed direction + recipient as the target address.
+      expect(mockClient.createArkadeToEvmSwapGeneric).toHaveBeenCalledWith({
+        targetAddress: '0xRecipient',
+        tokenAddress: '0xusdt0',
+        evmChainId: 42161,
+        sourceAmount: 100000n
+      })
+
+      // The account funds the returned VHTLC with the server-confirmed amount.
+      expect(account.sendTransaction).toHaveBeenCalledWith({ to: 'ark1qvhtlc', value: 100000n })
+
+      // Gasless claim by swap id.
+      expect(mockClient.claim).toHaveBeenCalledWith('swap-1')
+
+      expect(result).toEqual({
+        id: 'swap-1',
+        hash: '0xevmclaim',
+        fromTokenAmount: 100000n,
+        toTokenAmount: 58000000n,
+        fees: [
+          { type: 'protocol', amount: 250n, token: 'btc', chain: 'Bitcoin', included: true, description: 'Swap fee' }
+        ],
+        transactions: [
+          { hash: '0xfundtx', chain: 'Arkade', type: 'source' },
+          { hash: '0xevmclaim', chain: 42161, type: 'destination' }
+        ]
+      })
+    })
+
+    test('throws if the account cannot send (read-only or missing)', async () => {
+      const readOnly = new SatoraProtocol({ getAddress: jest.fn() })
+      await expect(
+        readOnly.swidge({ fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n, recipient: '0xR' })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.createArkadeToEvmSwapGeneric).not.toHaveBeenCalled()
+    })
+
+    test('throws if recipient is missing', async () => {
+      await expect(
+        protocol.swidge({ fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+    })
+
+    test('throws for an unsupported direction (EVM source)', async () => {
+      await expect(
+        protocol.swidge({ fromToken: '42161:0xusdt0', toToken: 'Arkade:btc', fromTokenAmount: 100000n, recipient: 'ark1q' })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+    })
+
+    test('throws if the gasless claim fails', async () => {
+      mockClient.claim.mockResolvedValue({ success: false, message: 'boom' })
+      await expect(
+        protocol.swidge({ fromToken: 'Arkade:btc', toToken: '42161:0xusdt0', fromTokenAmount: 100000n, recipient: '0xR' })
+      ).rejects.toThrow('boom')
+    })
   })
 
   describe('getSwidgeStatus', () => {

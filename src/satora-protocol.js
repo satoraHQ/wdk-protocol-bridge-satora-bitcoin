@@ -40,7 +40,11 @@ import { SatoraInvalidOptionsError } from './errors.js'
  * @typedef {Object} SatoraProtocolConfig
  * @property {number} [defaultSlippage] - The default slippage tolerance as a decimal (e.g., 0.01 for 1%).
  * @property {string} [baseUrl] - Override the satora API base URL. Defaults to the SDK's production endpoint.
- * @property {string} [mnemonic] - BIP39 mnemonic for the SDK's Bitcoin/Arkade HD wallet. Not required for read-only operations (chains, tokens, quotes).
+ * @property {string} [mnemonic] - BIP39 mnemonic for the swap client's secret material (HTLC preimage + gasless-claim key). Separate from the funding account. Not required for read-only operations (chains, tokens, quotes).
+ * @property {string} [arkadeServerUrl] - Override the Arkade server URL.
+ * @property {string} [esploraUrl] - Override the Esplora (Bitcoin) API URL.
+ * @property {Object} [signerStorage] - A satora `WalletStorage` adapter persisting the seed / key index (the swap client's database). Recommended for fund-moving operations so an interrupted swap survives a restart. Omit for in-memory (not recoverable across restarts).
+ * @property {Object} [swapStorage] - A satora `SwapStorage` adapter persisting per-swap state for recovery/refund.
  */
 
 export default class SatoraProtocol extends SwidgeProtocol {
@@ -99,6 +103,10 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (!this._clientPromise) {
       let builder = Client.builder()
       if (this._config.baseUrl) builder = builder.withBaseUrl(this._config.baseUrl)
+      if (this._config.arkadeServerUrl) builder = builder.withArkadeServerUrl(this._config.arkadeServerUrl)
+      if (this._config.esploraUrl) builder = builder.withEsploraUrl(this._config.esploraUrl)
+      if (this._config.signerStorage) builder = builder.withSignerStorage(this._config.signerStorage)
+      if (this._config.swapStorage) builder = builder.withSwapStorage(this._config.swapStorage)
       if (this._config.mnemonic) builder = builder.withMnemonic(this._config.mnemonic)
       this._clientPromise = builder.build()
     }
@@ -164,14 +172,135 @@ export default class SatoraProtocol extends SwidgeProtocol {
   }
 
   /**
-   * Executes a swidge operation.
+   * Executes a swidge operation, driving the full atomic-swap flow to
+   * completion (one-shot): create the swap, fund the source HTLC from the
+   * wallet account, wait for the server to lock the destination, claim, and
+   * wait for settlement.
    *
-   * @param {SwidgeOptions} options - The swidge options.
+   * Currently implements the Arkade -> EVM direction: the source account funds
+   * the Arkade VHTLC and the EVM tokens are claimed gaslessly to
+   * `options.recipient`. Because the account is on the source (Arkade) chain,
+   * `options.recipient` (the EVM destination) is required.
+   *
+   * @param {SwidgeOptions} options - The swidge options (chain-qualified fromToken/toToken).
    * @param {SwidgeProtocolConfig} [config] - Optional provider-specific execution configuration.
    * @returns {Promise<SwidgeResult>} The swidge execution result.
+   * @throws {import('./errors.js').SatoraInvalidOptionsError} If the account, direction, recipient, or amount is invalid.
+   * @throws {Error} If the swap is refunded, expires, or times out.
    */
   async swidge (options, config) {
-    // TODO: Implement protocol-specific swidge
+    const account = this._account
+    if (!account || typeof account.sendTransaction !== 'function') {
+      throw new SatoraInvalidOptionsError(
+        'swidge requires a full wallet account to fund the swap (a read-only or missing account cannot send)'
+      )
+    }
+
+    const source = parseTokenId(options.fromToken)
+    const target = parseTokenId(options.toToken)
+    const targetChain = target.chain ??
+      (options.toChain !== undefined && options.toChain !== null ? String(options.toChain) : source.chain)
+
+    if (source.chain !== 'Arkade' || !isEvmChain(targetChain)) {
+      throw new SatoraInvalidOptionsError(
+        `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; only Arkade -> EVM is implemented`
+      )
+    }
+
+    const recipient = options.recipient
+    if (!recipient) {
+      throw new SatoraInvalidOptionsError(
+        'swidge requires options.recipient (the EVM address to receive the tokens); the source account is on Arkade'
+      )
+    }
+    if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
+      throw new SatoraInvalidOptionsError('Arkade -> EVM swidge requires fromTokenAmount (exact-in)')
+    }
+
+    const client = await this._getClient()
+
+    // 1. Create the swap. The server returns the VHTLC to fund and the exact
+    //    source/target amounts.
+    const { response } = await client.createArkadeToEvmSwapGeneric({
+      targetAddress: recipient,
+      tokenAddress: target.tokenId,
+      evmChainId: Number(targetChain),
+      sourceAmount: BigInt(options.fromTokenAmount)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // 2. Fund the Arkade VHTLC from the source account.
+    const funding = await account.sendTransaction({
+      to: response.btc_vhtlc_address,
+      value: fromTokenAmount
+    })
+
+    // 3. Wait for the server to lock the EVM side.
+    await this._waitForSwapStatus(client, id, SERVER_FUNDED_STATES, FUND_FAIL_STATES)
+
+    // 4. Claim the EVM tokens (gasless: the client signs, the server submits).
+    const claim = await client.claim(id)
+    if (!claim.success) {
+      throw new Error(`satora claim failed for swap ${id}: ${claim.message}`)
+    }
+
+    // 5. Wait for the atomic swap to settle (the server claims the Arkade VHTLC).
+    await this._waitForSwapStatus(client, id, TERMINAL_SUCCESS_STATES, TERMINAL_FAIL_STATES)
+
+    // 6. Assemble the result from the latest swap state.
+    const final = await client.getSwap(id)
+    const claimTx = final.evm_claim_txid ?? claim.txHash
+    const transactions = [{ hash: funding.hash, chain: 'Arkade', type: 'source' }]
+    if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
+
+    return {
+      id,
+      hash: claimTx ?? funding.hash,
+      fees: [{
+        type: 'protocol',
+        amount: BigInt(response.fee_sats),
+        token: FEE_TOKEN,
+        chain: FEE_CHAIN,
+        included: true,
+        description: 'Swap fee'
+      }],
+      transactions,
+      fromTokenAmount,
+      toTokenAmount
+    }
+  }
+
+  /**
+   * Polls a swap's status until it reaches one of `targets`, throwing if it
+   * reaches a failure state or the timeout elapses.
+   *
+   * @private
+   * @param {SatoraClient} client - The satora swap client.
+   * @param {string} id - The swap id.
+   * @param {string[]} targets - Status values that resolve the wait.
+   * @param {string[]} failStates - Status values that reject the wait.
+   * @param {{ timeoutMs?: number, intervalMs?: number }} [opts] - Timing options.
+   * @returns {Promise<Object>} The swap once it reaches a target status.
+   */
+  async _waitForSwapStatus (client, id, targets, failStates, { timeoutMs = 600000, intervalMs = 3000 } = {}) {
+    const target = new Set(targets)
+    const fail = new Set(failStates)
+    const deadline = Date.now() + timeoutMs
+
+    while (true) {
+      const swap = await client.getSwap(id)
+      if (target.has(swap.status)) return swap
+      if (fail.has(swap.status)) {
+        throw new Error(`satora swap ${id} failed with status "${swap.status}"`)
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for satora swap ${id} to reach ${targets.join('/')} (last status "${swap.status}")`)
+      }
+      await sleep(intervalMs)
+    }
   }
 
   /**
@@ -238,6 +367,33 @@ export default class SatoraProtocol extends SwidgeProtocol {
 // denominated in the native BTC token.
 const FEE_TOKEN = 'btc'
 const FEE_CHAIN = 'Bitcoin'
+
+// Swap status groupings for driving the Arkade -> EVM flow (satora SwapStatus
+// state machine).
+const SERVER_FUNDED_STATES = ['serverfunded', 'clientredeeming', 'clientredeemed', 'serverredeemed']
+const FUND_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'serverwontfund', 'clientfundedtoolate', 'clientinvalidfunded', 'clientredeemedandclientrefunded']
+const TERMINAL_SUCCESS_STATES = ['serverredeemed', 'clientredeemed']
+const TERMINAL_FAIL_STATES = ['expired', 'clientrefunded', 'clientfundedserverrefunded', 'clientrefundedserverfunded', 'clientrefundedserverrefunded', 'clientredeemedandclientrefunded']
+
+/**
+ * Resolves after `ms` milliseconds.
+ *
+ * @param {number} ms - The delay in milliseconds.
+ * @returns {Promise<void>}
+ */
+function sleep (ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * Returns true if the chain identifier is an EVM chain (a numeric id).
+ *
+ * @param {string | number} chain - The chain identifier.
+ * @returns {boolean}
+ */
+function isEvmChain (chain) {
+  return Number.isInteger(Number(chain))
+}
 
 /**
  * Reduces an amount by a slippage tolerance using basis-point integer math.
