@@ -18,11 +18,42 @@ import { toChainId } from './chains.js'
 
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedToken} SwidgeSupportedToken */
 
+// Satora's `token_id` alone is ambiguous: 'btc' is the identifier for BTC on
+// Bitcoin, Lightning, AND Arkade. So the WDK token identifier is chain-qualified
+// as `chain:tokenId` (e.g. '137:0x...', 'Bitcoin:btc', 'Lightning:btc'), which
+// carries the chain through the standard fromToken/toToken options.
+const SEPARATOR = ':'
+
 /**
- * Maps a satora `TokenInfo` to a WDK {@link SwidgeSupportedToken}. Satora's
- * `token_id` is the provider-specific token identifier: the literal 'btc' for
- * Bitcoin, or an EVM contract address ('0x...') otherwise. For EVM tokens the
- * contract address is also surfaced as `address`.
+ * Builds a chain-qualified WDK token identifier.
+ *
+ * @param {string | number} chain - The satora chain identifier.
+ * @param {string} tokenId - The satora token id ('btc' or a contract address).
+ * @returns {string} The `chain:tokenId` identifier.
+ */
+export function composeTokenId (chain, tokenId) {
+  return `${chain}${SEPARATOR}${tokenId}`
+}
+
+/**
+ * Splits a chain-qualified WDK token identifier into its parts. If the
+ * identifier is not chain-qualified, `chain` is undefined.
+ *
+ * @param {string} token - The token identifier (`chain:tokenId` or `tokenId`).
+ * @returns {{ chain: string | undefined, tokenId: string }} The parts.
+ */
+export function parseTokenId (token) {
+  const value = String(token)
+  const index = value.indexOf(SEPARATOR)
+  if (index === -1) return { chain: undefined, tokenId: value }
+  return { chain: value.slice(0, index), tokenId: value.slice(index + 1) }
+}
+
+/**
+ * Maps a satora `TokenInfo` to a WDK {@link SwidgeSupportedToken}. The `token`
+ * identifier is chain-qualified (`chain:tokenId`) so it can be passed straight
+ * back as `fromToken`/`toToken`. For EVM tokens the contract address is also
+ * surfaced as `address`.
  *
  * @param {Object} info - The satora token info.
  * @param {string} info.token_id - The provider-specific token identifier.
@@ -36,7 +67,7 @@ export function toSupportedToken (info) {
   const isEvmAddress = typeof info.token_id === 'string' && info.token_id.startsWith('0x')
 
   const token = {
-    token: info.token_id,
+    token: composeTokenId(info.chain, info.token_id),
     chain: toChainId(info.chain),
     symbol: info.symbol,
     decimals: info.decimals,

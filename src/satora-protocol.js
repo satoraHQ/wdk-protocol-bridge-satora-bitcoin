@@ -18,7 +18,8 @@ import { SwidgeProtocol } from '@tetherto/wdk-wallet/protocols'
 import { Client } from '@satora/swap'
 
 import { toChainId, toSupportedChain } from './chains.js'
-import { toSupportedToken } from './tokens.js'
+import { parseTokenId, toSupportedToken } from './tokens.js'
+import { SatoraInvalidOptionsError } from './errors.js'
 
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccount} IWalletAccount */
 /** @typedef {import('@tetherto/wdk-wallet').IWalletAccountReadOnly} IWalletAccountReadOnly */
@@ -109,11 +110,57 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * Returns a non-binding quote; the actual execution is performed
    * by {@link swidge}.
    *
+   * The source and destination chains are taken from the chain-qualified
+   * `fromToken`/`toToken` identifiers (`chain:tokenId`, e.g. '137:0x...' or
+   * 'Bitcoin:btc'), as returned by {@link getSupportedTokens}.
+   *
    * @param {SwidgeOptions} options - The swidge options.
    * @returns {Promise<SwidgeQuote>} The quoted swidge details.
+   * @throws {import('./errors.js').SatoraInvalidOptionsError} If `fromToken` is not chain-qualified or no amount is given.
    */
   async quoteSwidge (options) {
-    // TODO: Implement protocol-specific swidge fee estimation
+    const source = parseTokenId(options.fromToken)
+    if (source.chain === undefined) {
+      throw new SatoraInvalidOptionsError(
+        'fromToken must be chain-qualified, e.g. "137:0x..." or "Bitcoin:btc"'
+      )
+    }
+
+    const target = parseTokenId(options.toToken)
+    // The destination chain comes from the token; falling back to the toChain
+    // option, then to the source chain (a same-chain swap).
+    const targetChain = target.chain ??
+      (options.toChain !== undefined && options.toChain !== null ? String(options.toChain) : source.chain)
+
+    const params = {
+      sourceChain: source.chain,
+      sourceToken: source.tokenId,
+      targetChain,
+      targetToken: target.tokenId
+    }
+
+    if (options.fromTokenAmount !== undefined && options.fromTokenAmount !== null) {
+      params.sourceAmount = Number(options.fromTokenAmount)
+    } else if (options.toTokenAmount !== undefined && options.toTokenAmount !== null) {
+      params.targetAmount = Number(options.toTokenAmount)
+    } else {
+      throw new SatoraInvalidOptionsError(
+        'either fromTokenAmount (exact-in) or toTokenAmount (exact-out) is required'
+      )
+    }
+
+    const client = await this._getClient()
+    const quote = await client.getQuote(params)
+
+    const toTokenAmount = BigInt(quote.net_target_amount)
+    const slippage = options.slippage ?? this._config.defaultSlippage ?? 0
+
+    return {
+      fromTokenAmount: BigInt(quote.net_source_amount),
+      toTokenAmount,
+      toTokenAmountMin: applySlippage(toTokenAmount, slippage),
+      fees: toSwidgeFees(quote)
+    }
   }
 
   /**
@@ -183,4 +230,66 @@ export default class SatoraProtocol extends SwidgeProtocol {
     const allowed = new Set(chainFilter)
     return tokens.filter(token => allowed.has(String(token.chain)))
   }
+}
+
+/** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeFee} SwidgeFee */
+
+// Satora prices everything in BTC terms, so all quoted fees are in satoshis and
+// denominated in the native BTC token.
+const FEE_TOKEN = 'btc'
+const FEE_CHAIN = 'Bitcoin'
+
+/**
+ * Reduces an amount by a slippage tolerance using basis-point integer math.
+ *
+ * @param {bigint} amount - The amount in base units.
+ * @param {number} slippage - The slippage as a decimal (e.g. 0.01 for 1%).
+ * @returns {bigint} The amount after applying slippage.
+ */
+function applySlippage (amount, slippage) {
+  if (!slippage || slippage <= 0) return amount
+  const bps = BigInt(Math.round(slippage * 10000))
+  return amount - (amount * bps) / 10000n
+}
+
+/**
+ * Maps a satora quote response to the itemised WDK fee breakdown. The satora
+ * `net_source_amount`/`net_target_amount` already account for fees, so each fee
+ * is reported with `included: true`.
+ *
+ * @param {Object} quote - The satora quote response.
+ * @returns {SwidgeFee[]} The itemised fees.
+ */
+function toSwidgeFees (quote) {
+  const fees = [
+    {
+      type: 'protocol',
+      amount: BigInt(quote.protocol_fee),
+      token: FEE_TOKEN,
+      chain: FEE_CHAIN,
+      included: true,
+      description: `Protocol fee (rate ${quote.protocol_fee_rate})`
+    },
+    {
+      type: 'network',
+      amount: BigInt(quote.network_fee),
+      token: FEE_TOKEN,
+      chain: FEE_CHAIN,
+      included: true,
+      description: 'Network fee (HTLC create/claim + BTC mining)'
+    }
+  ]
+
+  if (quote.gasless_network_fee) {
+    fees.push({
+      type: 'network',
+      amount: BigInt(quote.gasless_network_fee),
+      token: FEE_TOKEN,
+      chain: FEE_CHAIN,
+      included: true,
+      description: 'Gasless DEX execution gas'
+    })
+  }
+
+  return fees
 }

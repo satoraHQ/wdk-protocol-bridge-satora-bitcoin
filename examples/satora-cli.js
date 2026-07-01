@@ -74,16 +74,87 @@ async function tokens (flags) {
 
   console.log(`Supported tokens (${supported.length}):\n`)
   for (const token of supported) {
-    const address = token.address ? `  ${token.address}` : ''
+    // token.token is the chain-qualified id to pass to `quote` as --from/--to.
     console.log(
-      `  ${String(token.chain).padEnd(10)} ${token.symbol.padEnd(8)} decimals: ${String(token.decimals).padEnd(4)} ${token.name}${address}`
+      `  ${token.token.padEnd(46)} ${token.symbol.padEnd(8)} decimals: ${String(token.decimals).padEnd(4)} ${token.name}`
     )
+  }
+}
+
+// BTC (and its Lightning/Arkade variants) use 8 decimals; satora quotes fees in
+// satoshis, denominated in BTC.
+const BTC_DECIMALS = 8
+
+// Formats a base-unit bigint as a decimal string with the given decimals.
+function formatUnits (amount, decimals) {
+  const value = BigInt(amount)
+  const negative = value < 0n
+  const abs = negative ? -value : value
+  const base = 10n ** BigInt(decimals)
+  const whole = (abs / base).toString()
+  const fraction = (abs % base).toString().padStart(decimals, '0').replace(/0+$/, '')
+  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`
+}
+
+// Parses a decimal token amount into a base-unit bigint (e.g. "0.001" @ 8 -> 100000n).
+function parseUnits (value, decimals) {
+  const str = String(value).trim()
+  const negative = str.startsWith('-')
+  const [whole, fraction = ''] = (negative ? str.slice(1) : str).split('.')
+  if (fraction.length > decimals) {
+    throw new Error(`"${value}" has more than ${decimals} decimal places`)
+  }
+  const result = BigInt(`${whole || '0'}${fraction.padEnd(decimals, '0')}`)
+  return negative ? -result : result
+}
+
+async function quote (flags) {
+  const protocol = createProtocol(flags)
+
+  // Look up decimals up front: input amounts are given in decimal token units
+  // and converted to base units, and the output is formatted the same way.
+  const supported = await protocol.getSupportedTokens()
+  const byId = new Map(supported.map(token => [token.token, token]))
+  const decimalsOf = (tokenId) => {
+    const info = byId.get(tokenId)
+    if (!info) throw new Error(`unknown token "${tokenId}" — run the "tokens" command to list valid ids`)
+    return info.decimals
+  }
+
+  const options = { fromToken: flags.from, toToken: flags.to }
+  if (flags['to-chain'] !== undefined) options.toChain = flags['to-chain']
+  if (flags.amount !== undefined) {
+    options.fromTokenAmount = parseUnits(flags.amount, decimalsOf(flags.from))
+  } else if (flags['out-amount'] !== undefined) {
+    options.toTokenAmount = parseUnits(flags['out-amount'], decimalsOf(flags.to))
+  }
+
+  const result = await protocol.quoteSwidge(options)
+
+  const format = (amount, tokenId) => {
+    const info = byId.get(tokenId)
+    if (!info) return `${amount} (base units)`
+    return `${formatUnits(amount, info.decimals)} ${info.symbol}`
+  }
+  const bare = (amount, tokenId) => {
+    const info = byId.get(tokenId)
+    return info ? formatUnits(amount, info.decimals) : String(amount)
+  }
+
+  console.log('Quote:')
+  console.log(`  spend:   ${format(result.fromTokenAmount, options.fromToken)}  (${options.fromToken})`)
+  console.log(`  receive: ${format(result.toTokenAmount, options.toToken)} (min ${bare(result.toTokenAmountMin, options.toToken)})  (${options.toToken})`)
+  console.log('  fees:')
+  for (const fee of result.fees) {
+    const description = fee.description ? `  ${fee.description}` : ''
+    console.log(`    ${fee.type.padEnd(8)} ${formatUnits(fee.amount, BTC_DECIMALS)} ${fee.token}${description}`)
   }
 }
 
 const COMMANDS = {
   chains,
-  tokens
+  tokens,
+  quote
 }
 
 function usage () {
@@ -95,12 +166,18 @@ Usage:
 Commands:
   chains            List the chains supported by the satora protocol
   tokens            List the tokens supported by the satora protocol
+  quote             Quote a swidge using chain-qualified token ids, e.g.
+                    --from Bitcoin:btc --to 42161:0xfd08... --amount 0.001
 
 Options:
-  --base-url <url>  Override the satora API base URL (or set SATORA_BASE_URL).
-                    Defaults to the SDK's production endpoint.
-  --from-chain <id> Filter tokens by source chain (tokens command).
-  --to-chain <id>   Filter tokens by destination chain (tokens command).`)
+  --base-url <url>   Override the satora API base URL (or set SATORA_BASE_URL).
+                     Defaults to the SDK's production endpoint.
+  --from-chain <id>  Source-chain filter (tokens command).
+  --to-chain <id>    Dest-chain filter (tokens) / destination chain (quote).
+  --from <chain:id>  Source token, chain-qualified (quote).
+  --to <chain:id>    Destination token, chain-qualified (quote).
+  --amount <n>       Exact-in amount in source token units, e.g. 0.001 (quote).
+  --out-amount <n>   Exact-out amount in destination token units (quote).`)
 }
 
 async function main () {

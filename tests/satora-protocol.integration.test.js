@@ -75,20 +75,45 @@ describe('SatoraProtocol (integration)', { skip }, () => {
         }
       }
 
-      // BTC must be discoverable.
-      assert.ok(tokens.some(t => t.token === 'btc'), 'BTC is supported')
+      // Token ids are chain-qualified; BTC on Bitcoin must be discoverable.
+      assert.ok(tokens.some(t => t.token === 'Bitcoin:btc'), 'Bitcoin:btc is supported')
     })
 
     it('filters tokens by chain', async () => {
       const protocol = new SatoraProtocol(undefined, config)
 
-      const polygon = await protocol.getSupportedTokens({ toChain: 137 })
+      const polygon = await protocol.getSupportedTokens({ toChain: 42161 })
 
-      assert.ok(polygon.length > 0, 'at least one Polygon token')
+      assert.ok(polygon.length > 0, 'at least one Arbitrum token')
       assert.ok(
-        polygon.every(t => String(t.chain) === '137'),
-        'every returned token is on Polygon (137)'
+        polygon.every(t => String(t.chain) === '42161'),
+        'every returned token is on Arbitrum (42161)'
       )
+    })
+  })
+
+  describe('quoteSwidge', () => {
+    it('quotes an exact-in Bitcoin -> Arbitrum USDT0 swap using chain-qualified tokens', async () => {
+      const protocol = new SatoraProtocol(undefined, config)
+
+      const quote = await protocol.quoteSwidge({
+        fromToken: 'Bitcoin:btc',
+        toToken: '42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9', // USDT0 on Arbitrum
+        fromTokenAmount: 100000n // 0.001 BTC in sats
+      })
+
+      assert.equal(typeof quote.fromTokenAmount, 'bigint')
+      assert.equal(typeof quote.toTokenAmount, 'bigint')
+      assert.equal(typeof quote.toTokenAmountMin, 'bigint')
+      assert.ok(quote.toTokenAmount > 0n, 'receives a positive amount')
+      assert.ok(quote.toTokenAmountMin <= quote.toTokenAmount, 'min does not exceed expected')
+
+      assert.ok(Array.isArray(quote.fees) && quote.fees.length > 0, 'fees is a populated array')
+      for (const fee of quote.fees) {
+        assert.ok(['network', 'protocol', 'affiliate', 'other'].includes(fee.type), 'valid fee type')
+        assert.equal(typeof fee.amount, 'bigint')
+        assert.equal(typeof fee.token, 'string')
+      }
     })
   })
 })
