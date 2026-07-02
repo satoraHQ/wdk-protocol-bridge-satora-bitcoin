@@ -287,7 +287,8 @@ describe('SatoraProtocol', () => {
         ['clientrefunded', 'refunded'],
         ['expired', 'expired'],
         ['serverwontfund', 'failed'],
-        ['clientredeemedandclientrefunded', 'partial']
+        ['clientfundedtoolate', 'action-required'],
+        ['clientredeemedandclientrefunded', 'completed']
       ]
 
       for (const [swapStatus, swidgeStatus] of cases) {
@@ -306,6 +307,42 @@ describe('SatoraProtocol', () => {
     test('propagates the error when no swap exists for the id', async () => {
       mockClient.getSwap.mockRejectedValue(new Error('swap not found'))
       await expect(protocol.getSwidgeStatus('nope')).rejects.toThrow('swap not found')
+    })
+  })
+
+  describe('resumeSwidge', () => {
+    // resume needs no account — the claim goes to the swap's stored recipient.
+    test('returns immediately when the swap is already settled', async () => {
+      mockClient.getSwap.mockResolvedValue({ status: 'serverredeemed', evm_claim_txid: '0xc', evm_chain_id: 42161 })
+
+      const result = await protocol.resumeSwidge('swap-1')
+
+      expect(result).toEqual({
+        id: 'swap-1',
+        status: 'completed',
+        transactions: [{ hash: '0xc', chain: 42161, type: 'destination' }]
+      })
+      expect(mockClient.claim).not.toHaveBeenCalled()
+    })
+
+    test('drives an in-flight swap to completion (claim + settle)', async () => {
+      mockClient.getSwap
+        .mockResolvedValueOnce({ status: 'serverfunded' }) // initial
+        .mockResolvedValueOnce({ status: 'serverfunded' }) // wait for server-funded
+        .mockResolvedValue({ status: 'serverredeemed', evm_claim_txid: '0xc', evm_chain_id: 42161 })
+      mockClient.claim.mockResolvedValue({ success: true, message: 'ok', txHash: '0xclaim' })
+
+      const result = await protocol.resumeSwidge('swap-1')
+
+      expect(mockClient.claim).toHaveBeenCalledWith('swap-1')
+      expect(result.status).toBe('completed')
+    })
+
+    test('throws when the swap cannot complete', async () => {
+      mockClient.getSwap.mockResolvedValue({ status: 'expired' })
+
+      await expect(protocol.resumeSwidge('swap-1')).rejects.toThrow(/expired/)
+      expect(mockClient.claim).not.toHaveBeenCalled()
     })
   })
 

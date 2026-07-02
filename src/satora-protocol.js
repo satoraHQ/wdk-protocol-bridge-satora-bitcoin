@@ -251,20 +251,10 @@ export default class SatoraProtocol extends SwidgeProtocol {
       value: fromTokenAmount
     })
 
-    // 3. Wait for the server to lock the EVM side.
-    await this._waitForSwapStatus(client, id, SERVER_FUNDED_STATES, FUND_FAIL_STATES)
+    // 3. Wait for the destination lock, claim (gaslessly), and settle.
+    const { swap: final, claim } = await this._completeSwap(client, id)
 
-    // 4. Claim the EVM tokens (gasless: the client signs, the server submits).
-    const claim = await client.claim(id)
-    if (!claim.success) {
-      throw new Error(`satora claim failed for swap ${id}: ${claim.message}`)
-    }
-
-    // 5. Wait for the atomic swap to settle (the server claims the Arkade VHTLC).
-    await this._waitForSwapStatus(client, id, TERMINAL_SUCCESS_STATES, TERMINAL_FAIL_STATES)
-
-    // 6. Assemble the result from the latest swap state.
-    const final = await client.getSwap(id)
+    // 4. Assemble the result from the settled swap.
     const claimTx = final.evm_claim_txid ?? claim.txHash
     const transactions = [{ hash: funding.hash, chain: 'Arkade', type: 'source' }]
     if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
@@ -317,6 +307,30 @@ export default class SatoraProtocol extends SwidgeProtocol {
   }
 
   /**
+   * Drives an already-funded swap to settlement: waits for the destination to
+   * be locked, claims (gaslessly), and waits for the atomic swap to settle.
+   * Shared by {@link swidge} and {@link resumeSwidge}.
+   *
+   * @private
+   * @param {SatoraClient} client - The satora swap client.
+   * @param {string} id - The swap id.
+   * @param {{ timeoutMs?: number, intervalMs?: number }} [waitOpts] - Polling overrides.
+   * @returns {Promise<{ swap: Object, claim: Object }>} The settled swap and the claim result.
+   * @throws {Error} If the claim fails or the swap reaches a failure state.
+   */
+  async _completeSwap (client, id, waitOpts = {}) {
+    await this._waitForSwapStatus(client, id, SERVER_FUNDED_STATES, FUND_FAIL_STATES, waitOpts)
+
+    const claim = await client.claim(id)
+    if (!claim.success) {
+      throw new Error(`satora claim failed for swap ${id}: ${claim.message}`)
+    }
+
+    const swap = await this._waitForSwapStatus(client, id, TERMINAL_SUCCESS_STATES, TERMINAL_FAIL_STATES, waitOpts)
+    return { swap, claim }
+  }
+
+  /**
    * Retrieves the current status of an in-flight swidge.
    *
    * @param {string} id - The swidge execution identifier returned by swidge.
@@ -333,6 +347,40 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (transactions.length > 0) result.transactions = transactions
 
     return result
+  }
+
+  /**
+   * Resumes a persisted swap, driving it to completion: waits for the
+   * destination to be locked, claims (gaslessly, to the swap's stored
+   * recipient), and settles. Throws if the swap cannot complete (e.g. it
+   * expired or was refunded).
+   *
+   * This is a recovery operation for a swap interrupted after {@link swidge}
+   * created and funded it (e.g. the process died mid-flight). It is driven by
+   * the swap client's persisted secret (mnemonic + storage); no account is
+   * needed, since the claim goes to the recipient recorded on the swap.
+   *
+   * @param {string} id - The swap id.
+   * @param {{ timeoutMs?: number, intervalMs?: number }} [options] - Polling overrides.
+   * @returns {Promise<SwidgeStatusResult & { id: string }>} The 'completed' status and transactions.
+   * @throws {Error} If the swap cannot be completed.
+   */
+  async resumeSwidge (id, options = {}) {
+    const client = await this._getClient()
+
+    const waitOpts = {}
+    if (options.timeoutMs !== undefined) waitOpts.timeoutMs = options.timeoutMs
+    if (options.intervalMs !== undefined) waitOpts.intervalMs = options.intervalMs
+
+    const existing = await client.getSwap(id)
+
+    // Already settled — nothing to resume.
+    if (toSwidgeStatus(existing.status) === 'completed') {
+      return { id, status: 'completed', transactions: toSwidgeTransactions(existing) }
+    }
+
+    const { swap } = await this._completeSwap(client, id, waitOpts)
+    return { id, status: 'completed', transactions: toSwidgeTransactions(swap) }
   }
 
   /**
