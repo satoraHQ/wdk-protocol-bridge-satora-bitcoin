@@ -42,8 +42,9 @@
 //   # 3. check a swap's status by id
 //   node --env-file=examples/.env examples/satora-cli-arkade.js status <swap-id>
 //
-//   # recover an interrupted swap: drive it to completion
+//   # recover an interrupted swap: drive it to completion, or refund if it cannot
 //   node --env-file=examples/.env examples/satora-cli-arkade.js resume <swap-id>
+//   node --env-file=examples/.env examples/satora-cli-arkade.js refund <swap-id>
 
 import {
   EsploraProvider,
@@ -171,6 +172,7 @@ Commands:
                       --amount <btc>          amount to send, in BTC (e.g. 0.0001)
   status <swap-id>  Show the status of a swap by id
   resume <swap-id>  Drive an interrupted swap to completion (throws if it cannot)
+  refund <swap-id>  Refund a swap that cannot complete, back to the wallet
 
 Config comes from examples/.env (copy from examples/.env.example).`)
 }
@@ -235,7 +237,7 @@ async function main () {
     process.exit(0)
   }
 
-  // The address/send/swap commands fund or read the Arkade wallet.
+  // The address/send/refund/swap commands fund or read the Arkade wallet.
   const account = await buildArkadeAccount(mnemonic, { arkadeServerUrl, esploraUrl })
 
   if (command === 'address' || command === 'balance') {
@@ -257,6 +259,26 @@ async function main () {
 
     const { hash } = await account.sendTransaction({ to: flags.to, value: amountSats })
     console.log('Sent. txid:', hash)
+
+    return
+  }
+
+  if (command === 'refund') {
+    const swapId = argv[1] && !argv[1].startsWith('--') ? argv[1] : undefined
+    if (!swapId) {
+      console.error('refund requires a swap id: refund <swap-id>')
+      process.exit(1)
+    }
+
+    const protocol = await createProtocol(account, { mnemonic, arkadeServerUrl, esploraUrl, dbPath })
+    console.log(`Refunding swap ${swapId} to ${await account.getAddress()} ...`)
+
+    const result = await protocol.refundSwidge(swapId)
+    console.log('status:', result.status)
+    if (result.message) console.log('note:  ', result.message)
+    for (const tx of result.transactions ?? []) {
+      console.log(`  ${tx.type} tx${tx.chain ? ` (${tx.chain})` : ''}: ${tx.hash}`)
+    }
 
     return
   }
