@@ -13,7 +13,8 @@ const mockClient = {
   getQuote: jest.fn(),
   createArkadeToEvmSwapGeneric: jest.fn(),
   getSwap: jest.fn(),
-  claim: jest.fn()
+  claim: jest.fn(),
+  refundSwap: jest.fn()
 }
 
 jest.unstable_mockModule('@satora/swap', () => ({
@@ -45,6 +46,7 @@ describe('SatoraProtocol', () => {
     mockClient.createArkadeToEvmSwapGeneric.mockReset()
     mockClient.getSwap.mockReset()
     mockClient.claim.mockReset()
+    mockClient.refundSwap.mockReset()
 
     // Discovery methods do not require an account.
     protocol = new SatoraProtocol()
@@ -343,6 +345,49 @@ describe('SatoraProtocol', () => {
 
       await expect(protocol.resumeSwidge('swap-1')).rejects.toThrow(/expired/)
       expect(mockClient.claim).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('refundSwidge', () => {
+    let account
+
+    beforeEach(() => {
+      account = { getAddress: jest.fn().mockResolvedValue('ark1qsource') }
+      protocol = new SatoraProtocol(account)
+    })
+
+    test('throws if no account is bound (needed to receive the refund)', async () => {
+      const noAccount = new SatoraProtocol()
+      await expect(noAccount.refundSwidge('swap-1')).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.refundSwap).not.toHaveBeenCalled()
+    })
+
+    test('refunds to the account address by default', async () => {
+      mockClient.refundSwap.mockResolvedValue({ success: true, message: 'refunded', txId: 'btcrefund' })
+      mockClient.getSwap.mockResolvedValue({ status: 'clientrefunded' })
+
+      const result = await protocol.refundSwidge('swap-1')
+
+      expect(mockClient.refundSwap).toHaveBeenCalledWith('swap-1', { destinationAddress: 'ark1qsource' })
+      expect(result.status).toBe('refunded')
+      expect(result.message).toBe('refunded')
+      expect(result.transactions).toContainEqual({ hash: 'btcrefund', type: 'refund' })
+    })
+
+    test('merges caller options over the default destination address', async () => {
+      mockClient.refundSwap.mockResolvedValue({ success: true, message: 'ok' })
+      mockClient.getSwap.mockResolvedValue({ status: 'clientrefunded' })
+
+      await protocol.refundSwidge('swap-1', { destinationAddress: 'ark1qother' })
+
+      expect(mockClient.refundSwap).toHaveBeenCalledWith('swap-1', { destinationAddress: 'ark1qother' })
+    })
+
+    test('throws when the refund is not successful', async () => {
+      mockClient.refundSwap.mockResolvedValue({ success: false, message: 'too early to refund' })
+      mockClient.getSwap.mockResolvedValue({ status: 'serverfunded' })
+
+      await expect(protocol.refundSwidge('swap-1')).rejects.toThrow('too early to refund')
     })
   })
 

@@ -384,6 +384,44 @@ export default class SatoraProtocol extends SwidgeProtocol {
   }
 
   /**
+   * Refunds a swap that can no longer complete, reclaiming the source funds to
+   * the account's address. Use this when {@link resumeSwidge} throws.
+   *
+   * Requires an account: the reclaimed funds are returned to its address (the
+   * default `destinationAddress`). For Arkade -> EVM the refund is an off-chain
+   * Arkade-server operation.
+   *
+   * @param {string} id - The swap id.
+   * @param {Object} [options] - SDK refund options, merged over the default `destinationAddress` (the account address).
+   * @returns {Promise<SwidgeStatusResult & { id: string, message?: string }>} The 'refunded' status and transactions.
+   * @throws {import('./errors.js').SatoraInvalidOptionsError} If no account is bound.
+   * @throws {Error} If the swap cannot be refunded.
+   */
+  async refundSwidge (id, options = {}) {
+    const account = this._account
+    if (!account || typeof account.getAddress !== 'function') {
+      throw new SatoraInvalidOptionsError('refund requires a wallet account to receive the refund')
+    }
+
+    const client = await this._getClient()
+
+    const refundOptions = { destinationAddress: await account.getAddress(), ...options }
+    // TODO: we should check if refund is available and throw otherwise. This
+    // should be provided upstream in the SDK.
+    const refund = await client.refundSwap(id, refundOptions)
+    const swap = await client.getSwap(id, { updateStorage: true })
+
+    if (!refund.success) {
+      throw new Error(`swap ${id} could not be refunded (status "${swap.status}"): ${refund.message}`)
+    }
+
+    const transactions = toSwidgeTransactions(swap)
+    if (refund.txId) transactions.push({ hash: refund.txId, type: 'refund' })
+
+    return { id, status: 'refunded', transactions, message: refund.message }
+  }
+
+  /**
    * Retrieves the chains supported by the provider for swidge operations.
    *
    * @returns {Promise<SwidgeSupportedChain[]>} The supported chains.
