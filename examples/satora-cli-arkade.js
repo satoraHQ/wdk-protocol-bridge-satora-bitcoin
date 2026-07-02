@@ -41,6 +41,9 @@
 //
 //   # 3. check a swap's status by id
 //   node --env-file=examples/.env examples/satora-cli-arkade.js status <swap-id>
+//
+//   # recover an interrupted swap: drive it to completion
+//   node --env-file=examples/.env examples/satora-cli-arkade.js resume <swap-id>
 
 import {
   EsploraProvider,
@@ -100,6 +103,21 @@ async function createStorage (dbPath) {
   }
 }
 
+// Builds a SatoraProtocol backed by persistent storage. Pass `undefined` as the
+// account for read-only commands (status).
+async function createProtocol (account, { mnemonic, arkadeServerUrl, esploraUrl, dbPath }) {
+  const { signerStorage, swapStorage } = await createStorage(dbPath)
+  return new SatoraProtocol(account, {
+    mnemonic,
+    arkadeServerUrl,
+    esploraUrl,
+    accountChains: ['Arkade'], // the account is an Arkade wallet
+    ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
+    signerStorage,
+    swapStorage
+  })
+}
+
 /**
  * Builds an Arkade wallet from the seed and adapts it to the minimal WDK
  * account surface `swidge` needs: getAddress + sendTransaction({ to, value }).
@@ -152,6 +170,7 @@ Commands:
                       --recipient <address>   EVM address to receive the tokens
                       --amount <btc>          amount to send, in BTC (e.g. 0.0001)
   status <swap-id>  Show the status of a swap by id
+  resume <swap-id>  Drive an interrupted swap to completion (throws if it cannot)
 
 Config comes from examples/.env (copy from examples/.env.example).`)
 }
@@ -184,20 +203,32 @@ async function main () {
       process.exit(1)
     }
 
-    const { signerStorage, swapStorage } = await createStorage(dbPath)
-    const statusProtocol = new SatoraProtocol(undefined, {
-      mnemonic,
-      arkadeServerUrl,
-      esploraUrl,
-      ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
-      signerStorage,
-      swapStorage
-    })
-
+    const statusProtocol = await createProtocol(undefined, { mnemonic, arkadeServerUrl, esploraUrl, dbPath })
     const { status, transactions } = await statusProtocol.getSwidgeStatus(swapId)
     console.log('swap id:', swapId)
     console.log('status: ', status)
     for (const tx of transactions ?? []) {
+      console.log(`  ${tx.type} tx${tx.chain ? ` (${tx.chain})` : ''}: ${tx.hash}`)
+    }
+
+    process.exit(0)
+  }
+
+  // `resume` drives a swap to completion via the client's stored secret — no
+  // Arkade wallet needed (the claim goes to the swap's recorded recipient).
+  if (command === 'resume') {
+    const swapId = argv[1] && !argv[1].startsWith('--') ? argv[1] : undefined
+    if (!swapId) {
+      console.error('resume requires a swap id: resume <swap-id>')
+      process.exit(1)
+    }
+
+    const resumeProtocol = await createProtocol(undefined, { mnemonic, arkadeServerUrl, esploraUrl, dbPath })
+    console.log(`Resuming swap ${swapId} (driving it to completion) ...`)
+
+    const result = await resumeProtocol.resumeSwidge(swapId)
+    console.log('status:', result.status)
+    for (const tx of result.transactions ?? []) {
       console.log(`  ${tx.type} tx${tx.chain ? ` (${tx.chain})` : ''}: ${tx.hash}`)
     }
 
@@ -244,16 +275,7 @@ async function main () {
   console.log('Arkade wallet:', await account.getAddress())
   console.log('Balance:      ', await account.getBalance(), 'sats')
 
-  const { signerStorage, swapStorage } = await createStorage(dbPath)
-  const protocol = new SatoraProtocol(account, {
-    mnemonic,
-    arkadeServerUrl,
-    esploraUrl,
-    accountChains: ['Arkade'], // this account is an Arkade wallet
-    ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
-    signerStorage,
-    swapStorage
-  })
+  const protocol = await createProtocol(account, { mnemonic, arkadeServerUrl, esploraUrl, dbPath })
 
   // --amount is BTC; convert to sats.
   const amountSats = BigInt(Math.round(Number(flags.amount) * 1e8))
