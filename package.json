@@ -41,7 +41,8 @@
     "eventsource": "^4.1.0",
     "jest": "^29.7.0",
     "standard": "^17.1.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "viem": "^2.54.1"
   },
   "exports": {
     ".": {
