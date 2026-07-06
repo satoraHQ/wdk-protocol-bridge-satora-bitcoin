@@ -12,6 +12,8 @@ const mockClient = {
   getTokens: jest.fn(),
   getQuote: jest.fn(),
   createArkadeToEvmSwapGeneric: jest.fn(),
+  createEvmToArkadeSwapGeneric: jest.fn(),
+  fundSwap: jest.fn(),
   getSwap: jest.fn(),
   claim: jest.fn(),
   refundSwap: jest.fn()
@@ -44,6 +46,8 @@ describe('SatoraProtocol', () => {
     mockClient.getTokens.mockReset()
     mockClient.getQuote.mockReset()
     mockClient.createArkadeToEvmSwapGeneric.mockReset()
+    mockClient.createEvmToArkadeSwapGeneric.mockReset()
+    mockClient.fundSwap.mockReset()
     mockClient.getSwap.mockReset()
     mockClient.claim.mockReset()
     mockClient.refundSwap.mockReset()
@@ -260,6 +264,67 @@ describe('SatoraProtocol', () => {
     })
   })
 
+  describe('swidge (EVM -> Arkade)', () => {
+    let account
+
+    beforeEach(() => {
+      // For an EVM source the account is an EvmSigner (address + fundSwap-capable).
+      account = {
+        address: '0xEvmSigner',
+        sendTransaction: jest.fn() // EvmSigner shape; funding goes via client.fundSwap
+      }
+      protocol = new SatoraProtocol(account, { accountChains: [42161] })
+
+      mockClient.createEvmToArkadeSwapGeneric.mockResolvedValue({
+        response: { id: 'swap-2', source_amount: '1000000', target_amount: '1450', fee_sats: 30, btc_claim_txid: null }
+      })
+      mockClient.fundSwap.mockResolvedValue({ txHash: '0xfundtx' })
+      mockClient.claim.mockResolvedValue({ success: true, message: 'ok' })
+      mockClient.getSwap
+        .mockResolvedValueOnce({ status: 'serverfunded' })
+        .mockResolvedValue({ status: 'serverredeemed', direction: 'evm_to_arkade', evm_chain_id: 42161, evm_fund_txid: '0xfundtx', btc_claim_txid: 'btcclaim' })
+    })
+
+    test('creates, funds the EVM HTLC via fundSwap, and settles to Arkade', async () => {
+      const result = await protocol.swidge({
+        fromToken: '42161:0xusdt0',
+        toToken: 'Arkade:btc',
+        fromTokenAmount: 1000000n,
+        recipient: 'ark1qdest'
+      })
+
+      expect(mockClient.createEvmToArkadeSwapGeneric).toHaveBeenCalledWith({
+        targetAddress: 'ark1qdest',
+        tokenAddress: '0xusdt0',
+        evmChainId: 42161,
+        userAddress: '0xEvmSigner',
+        sourceAmount: 1000000n
+      })
+      // The EVM HTLC is funded via the signer, not account.sendTransaction.
+      expect(mockClient.fundSwap).toHaveBeenCalledWith('swap-2', account)
+
+      expect(result).toEqual({
+        id: 'swap-2',
+        hash: 'btcclaim',
+        fromTokenAmount: 1000000n,
+        toTokenAmount: 1450n,
+        fees: [{ type: 'protocol', amount: 30n, token: 'btc', chain: 'Bitcoin', included: true, description: 'Swap fee' }],
+        transactions: [
+          { hash: '0xfundtx', chain: 42161, type: 'source' },
+          { hash: 'btcclaim', chain: 'Arkade', type: 'destination' }
+        ]
+      })
+    })
+
+    test('rejects an EVM source not declared in accountChains', async () => {
+      const wrong = new SatoraProtocol(account, { accountChains: ['Arkade'] })
+      await expect(
+        wrong.swidge({ fromToken: '42161:0xusdt0', toToken: 'Arkade:btc', fromTokenAmount: 1000000n, recipient: 'ark1qdest' })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.createEvmToArkadeSwapGeneric).not.toHaveBeenCalled()
+    })
+  })
+
   describe('getSwidgeStatus', () => {
     test('maps a settled swap to completed with source/destination transactions', async () => {
       mockClient.getSwap.mockResolvedValue({
@@ -275,7 +340,7 @@ describe('SatoraProtocol', () => {
       expect(result).toEqual({
         status: 'completed',
         transactions: [
-          { hash: 'btcfund', type: 'source' },
+          { hash: 'btcfund', chain: 'Arkade', type: 'source' },
           { hash: '0xevmclaim', chain: 42161, type: 'destination' }
         ]
       })

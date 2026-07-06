@@ -35,6 +35,7 @@ import { SatoraInvalidOptionsError } from './errors.js'
 /** @typedef {import('@tetherto/wdk-wallet/protocols').SwidgeSupportedTokensOptions} SwidgeSupportedTokensOptions */
 
 /** @typedef {import('@satora/swap').Client} SatoraClient */
+/** @typedef {import('@satora/swap').EvmSigner} EvmSigner */
 
 /**
  * @typedef {Object} SatoraProtocolConfig
@@ -178,10 +179,16 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * wallet account, wait for the server to lock the destination, claim, and
    * wait for settlement.
    *
-   * Currently implements the Arkade -> EVM direction: the source account funds
-   * the Arkade VHTLC and the EVM tokens are claimed gaslessly to
-   * `options.recipient`. Because the account is on the source (Arkade) chain,
-   * `options.recipient` (the EVM destination) is required.
+   * Implemented directions:
+   * - **Arkade -> EVM**: the account (an Arkade wallet) funds the Arkade VHTLC
+   *   via `sendTransaction`; the EVM tokens are claimed gaslessly to
+   *   `options.recipient` (the EVM destination).
+   * - **EVM -> Arkade**: the account (an {@link EvmSigner}) funds the EVM HTLC
+   *   via `client.fundSwap`; the BTC is claimed to `options.recipient` (the
+   *   Arkade destination).
+   *
+   * Because the account is the source wallet, `options.recipient` (on the
+   * destination chain) is always required.
    *
    * @param {SwidgeOptions} options - The swidge options (chain-qualified fromToken/toToken).
    * @param {SwidgeProtocolConfig} [config] - Optional provider-specific execution configuration.
@@ -202,20 +209,14 @@ export default class SatoraProtocol extends SwidgeProtocol {
     const targetChain = target.chain ??
       (options.toChain !== undefined && options.toChain !== null ? String(options.toChain) : source.chain)
 
-    if (source.chain !== 'Arkade' || !isEvmChain(targetChain)) {
-      throw new SatoraInvalidOptionsError(
-        `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; only Arkade -> EVM is implemented`
-      )
-    }
-
     const recipient = options.recipient
     if (!recipient) {
       throw new SatoraInvalidOptionsError(
-        'swidge requires options.recipient (the EVM address to receive the tokens); the source account is on Arkade'
+        'swidge requires options.recipient (the destination address); the account is the source wallet'
       )
     }
     if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
-      throw new SatoraInvalidOptionsError('Arkade -> EVM swidge requires fromTokenAmount (exact-in)')
+      throw new SatoraInvalidOptionsError('swidge requires fromTokenAmount (exact-in)')
     }
 
     // The account funds the source side, so it must operate on the source chain.
@@ -232,8 +233,25 @@ export default class SatoraProtocol extends SwidgeProtocol {
 
     const client = await this._getClient()
 
-    // 1. Create the swap. The server returns the VHTLC to fund and the exact
-    //    source/target amounts.
+    if (source.chain === 'Arkade' && isEvmChain(targetChain)) {
+      return this._swidgeArkadeToEvm(client, account, { target, targetChain, recipient, options })
+    }
+    if (isEvmChain(source.chain) && target.chain === 'Arkade') {
+      return this._swidgeEvmToArkade(client, account, { source, recipient, options })
+    }
+
+    throw new SatoraInvalidOptionsError(
+      `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; only Arkade -> EVM and EVM -> Arkade are implemented`
+    )
+  }
+
+  /**
+   * Executes an Arkade -> EVM swap: create, fund the Arkade VHTLC from the
+   * account, then complete. See {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeArkadeToEvm (client, account, { target, targetChain, recipient, options }) {
     const { response } = await client.createArkadeToEvmSwapGeneric({
       targetAddress: recipient,
       tokenAddress: target.tokenId,
@@ -245,35 +263,48 @@ export default class SatoraProtocol extends SwidgeProtocol {
     const fromTokenAmount = BigInt(response.source_amount)
     const toTokenAmount = BigInt(response.target_amount)
 
-    // 2. Fund the Arkade VHTLC from the source account.
-    const funding = await account.sendTransaction({
-      to: response.btc_vhtlc_address,
-      value: fromTokenAmount
-    })
+    // Fund the Arkade VHTLC from the source account.
+    const funding = await account.sendTransaction({ to: response.btc_vhtlc_address, value: fromTokenAmount })
 
-    // 3. Wait for the destination lock, claim (gaslessly), and settle.
     const { swap: final, claim } = await this._completeSwap(client, id)
 
-    // 4. Assemble the result from the settled swap.
     const claimTx = final.evm_claim_txid ?? claim.txHash
     const transactions = [{ hash: funding.hash, chain: 'Arkade', type: 'source' }]
     if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
 
-    return {
-      id,
-      hash: claimTx ?? funding.hash,
-      fees: [{
-        type: 'protocol',
-        amount: BigInt(response.fee_sats),
-        token: FEE_TOKEN,
-        chain: FEE_CHAIN,
-        included: true,
-        description: 'Swap fee'
-      }],
-      transactions,
-      fromTokenAmount,
-      toTokenAmount
-    }
+    return { id, hash: claimTx ?? funding.hash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
+  }
+
+  /**
+   * Executes an EVM -> Arkade swap: create, fund the EVM HTLC from the account
+   * (an {@link EvmSigner}) via `client.fundSwap`, then complete. See
+   * {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeEvmToArkade (client, account, { source, recipient, options }) {
+    const { response } = await client.createEvmToArkadeSwapGeneric({
+      targetAddress: recipient,
+      tokenAddress: source.tokenId,
+      evmChainId: Number(source.chain),
+      userAddress: account.address,
+      sourceAmount: BigInt(options.fromTokenAmount)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // Fund the EVM HTLC from the EvmSigner (token approval + deposit).
+    const { txHash } = await client.fundSwap(id, account)
+
+    const { swap: final } = await this._completeSwap(client, id)
+
+    const claimTx = final.btc_claim_txid
+    const transactions = [{ hash: txHash, chain: Number(source.chain), type: 'source' }]
+    if (claimTx) transactions.push({ hash: claimTx, chain: 'Arkade', type: 'destination' })
+
+    return { id, hash: claimTx ?? txHash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
   }
 
   /**
@@ -513,19 +544,42 @@ function toSwidgeStatus (status) {
 }
 
 /**
- * Extracts the on-chain transactions from a satora swap, best effort. Only the
- * fields present on the swap (which vary by direction) are reported.
+ * Extracts the user-facing source/destination transactions from a satora swap,
+ * best effort. Which txids are the source vs destination depends on the swap
+ * direction (arkade funds via BTC, EVM funds via the HTLC contract); defaults
+ * to the Arkade -> EVM layout when `direction` is absent.
  *
  * @param {Object} swap - The satora swap (GetSwapResponse).
  * @returns {import('@tetherto/wdk-wallet/protocols').SwidgeTransaction[]} The transactions.
  */
 function toSwidgeTransactions (swap) {
   const transactions = []
-  if (swap.btc_fund_txid) transactions.push({ hash: swap.btc_fund_txid, type: 'source' })
-  if (swap.evm_claim_txid) {
-    transactions.push({ hash: swap.evm_claim_txid, chain: swap.evm_chain_id, type: 'destination' })
+  if (swap.direction === 'evm_to_arkade') {
+    if (swap.evm_fund_txid) transactions.push({ hash: swap.evm_fund_txid, chain: swap.evm_chain_id, type: 'source' })
+    if (swap.btc_claim_txid) transactions.push({ hash: swap.btc_claim_txid, chain: 'Arkade', type: 'destination' })
+  } else {
+    if (swap.btc_fund_txid) transactions.push({ hash: swap.btc_fund_txid, chain: 'Arkade', type: 'source' })
+    if (swap.evm_claim_txid) transactions.push({ hash: swap.evm_claim_txid, chain: swap.evm_chain_id, type: 'destination' })
   }
   return transactions
+}
+
+/**
+ * Builds the itemised WDK fee list from a swap's `fee_sats` (satora prices the
+ * swap fee in satoshis, denominated in BTC).
+ *
+ * @param {number|string} feeSats - The swap fee in satoshis.
+ * @returns {SwidgeFee[]} The fees.
+ */
+function swapFee (feeSats) {
+  return [{
+    type: 'protocol',
+    amount: BigInt(feeSats),
+    token: FEE_TOKEN,
+    chain: FEE_CHAIN,
+    included: true,
+    description: 'Swap fee'
+  }]
 }
 
 /**
