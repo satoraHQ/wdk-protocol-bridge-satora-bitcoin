@@ -29,10 +29,15 @@
 //
 // Usage:
 //   node --env-file=examples/.env examples/satora-cli-evm.js address
+//   # EVM -> Arkade
 //   node --env-file=examples/.env examples/satora-cli-evm.js swap \
 //     --from 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
 //     --recipient ark1q... \
 //     --amount 1.5
+//   # EVM -> Lightning (recipient is a BOLT11 invoice, e.g. from satora-cli-spark.js invoice)
+//   node --env-file=examples/.env examples/satora-cli-evm.js swap \
+//     --from 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
+//     --to Lightning:btc --recipient lnbc...
 //   node --env-file=examples/.env examples/satora-cli-evm.js status <swap-id>
 //   node --env-file=examples/.env examples/satora-cli-evm.js resume <swap-id>
 
@@ -166,10 +171,11 @@ Usage:
 Commands:
   address           Show the EVM wallet address (--chain <id>, default 42161)
   balance           Show native + USDT0 balance (--chain <id>, --token <address>)
-  swap              Perform an EVM -> Arkade swap:
+  swap              Perform an EVM -> Arkade or EVM -> Lightning swap:
                       --from <chain:token>    EVM source token (e.g. 42161:0xfd08...)
-                      --recipient <address>   Arkade address to receive the BTC
-                      --amount <units>        amount in source-token units (e.g. 1.5)
+                      --to <chain:token>      destination (default Arkade:btc; or Lightning:btc)
+                      --recipient <address>   Arkade address, or a BOLT11 invoice for Lightning
+                      --amount <units>        source-token units (Arkade only; Lightning uses the invoice)
   status <swap-id>  Show the status of a swap by id
   resume <swap-id>  Drive an interrupted swap to completion (throws if it cannot)
 
@@ -251,30 +257,42 @@ async function main () {
     process.exit(1)
   }
 
-  if (!flags.from || !flags.recipient || flags.amount === undefined || flags.amount === true) {
-    console.error('swap requires: --from <chain:token> --recipient <arkade-address> --amount <token-units>')
+  if (!flags.from || !flags.recipient) {
+    console.error('swap requires: --from <chain:token> --recipient <address|invoice> [--to <chain:token>] [--amount <units>]')
     process.exit(1)
   }
+
+  const toToken = flags.to || 'Arkade:btc'
+  const toLightning = toToken.startsWith('Lightning')
 
   const chainId = Number(flags.from.split(':')[0])
   const { signer } = buildEvmAccount(mnemonic, chainId)
   const protocol = await createProtocol(signer, { mnemonic, chainId, dbPath })
 
-  // Look up the source token's decimals to convert the human amount.
   const info = (await protocol.getSupportedTokens()).find(t => t.token === flags.from)
   if (!info) throw new Error(`unknown token ${flags.from} — run: node examples/satora-cli.js tokens`)
-  const amountUnits = parseUnits(flags.amount, info.decimals)
+
+  const swapOptions = { fromToken: flags.from, toToken, recipient: flags.recipient }
+  if (toLightning) {
+    // EVM -> Lightning: the recipient is a BOLT11 invoice that carries the amount.
+    if (!flags.recipient.toLowerCase().startsWith('ln')) {
+      console.error('swap to Lightning requires --recipient to be a BOLT11 invoice (lnbc...)')
+      process.exit(1)
+    }
+  } else {
+    // EVM -> Arkade: exact-in, amount in source-token units.
+    if (flags.amount === undefined || flags.amount === true) {
+      console.error(`swap to ${toToken} requires --amount <${info.symbol} units>`)
+      process.exit(1)
+    }
+    swapOptions.fromTokenAmount = parseUnits(flags.amount, info.decimals)
+  }
 
   console.log('EVM wallet:', signer.address, `(chain ${chainId})`)
-  console.log(`\nSwapping ${flags.amount} ${info.symbol} -> BTC (Arkade) for ${flags.recipient} ...`)
+  console.log(`\nSwapping ${flags.amount ?? '(invoice amount)'} ${info.symbol} -> ${toToken} for ${flags.recipient} ...`)
   console.log('(this funds the EVM HTLC, then drives the whole flow — it can take a little while)\n')
 
-  const result = await protocol.swidge({
-    fromToken: flags.from,
-    toToken: 'Arkade:btc',
-    fromTokenAmount: amountUnits,
-    recipient: flags.recipient
-  })
+  const result = await protocol.swidge(swapOptions)
 
   console.log('Done:')
   console.log('  swap id: ', result.id)
