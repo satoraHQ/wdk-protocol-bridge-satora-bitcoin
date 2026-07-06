@@ -198,10 +198,8 @@ export default class SatoraProtocol extends SwidgeProtocol {
    */
   async swidge (options, config) {
     const account = this._account
-    if (!account || typeof account.sendTransaction !== 'function') {
-      throw new SatoraInvalidOptionsError(
-        'swidge requires a full wallet account to fund the swap (a read-only or missing account cannot send)'
-      )
+    if (!account) {
+      throw new SatoraInvalidOptionsError('swidge requires a wallet account to fund the swap')
     }
 
     const source = parseTokenId(options.fromToken)
@@ -236,12 +234,16 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (source.chain === 'Arkade' && isEvmChain(targetChain)) {
       return this._swidgeArkadeToEvm(client, account, { target, targetChain, recipient, options })
     }
+    if (source.chain === 'Lightning' && isEvmChain(targetChain)) {
+      return this._swidgeLightningToEvm(client, account, { target, targetChain, recipient, options })
+    }
     if (isEvmChain(source.chain) && target.chain === 'Arkade') {
       return this._swidgeEvmToArkade(client, account, { source, recipient, options })
     }
 
     throw new SatoraInvalidOptionsError(
-      `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; only Arkade -> EVM and EVM -> Arkade are implemented`
+      `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; ` +
+      'only Arkade -> EVM, Lightning -> EVM, and EVM -> Arkade are implemented'
     )
   }
 
@@ -252,6 +254,10 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @private
    */
   async _swidgeArkadeToEvm (client, account, { target, targetChain, recipient, options }) {
+    if (typeof account.sendTransaction !== 'function') {
+      throw new SatoraInvalidOptionsError('Arkade -> EVM swidge requires an Arkade wallet account (with sendTransaction)')
+    }
+
     const { response } = await client.createArkadeToEvmSwapGeneric({
       targetAddress: recipient,
       tokenAddress: target.tokenId,
@@ -276,6 +282,48 @@ export default class SatoraProtocol extends SwidgeProtocol {
   }
 
   /**
+   * Executes a Lightning -> EVM swap: create, pay the returned BOLT11 invoice
+   * from the account, then complete. The invoice is a hold invoice that only
+   * settles once the swap reveals the preimage (during claim), so the payment
+   * runs concurrently with completion. See {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeLightningToEvm (client, account, { target, targetChain, recipient, options }) {
+    if (typeof account.payInvoice !== 'function') {
+      throw new SatoraInvalidOptionsError('Lightning -> EVM swidge requires a Lightning wallet account (with payInvoice)')
+    }
+
+    const { response } = await client.createLightningToEvmSwapGeneric({
+      targetAddress: recipient,
+      evmChainId: Number(targetChain),
+      tokenAddress: target.tokenId,
+      amountIn: Number(options.fromTokenAmount)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // Pay the hold invoice concurrently with completion: the invoice only
+    // settles once the swap reveals the preimage (during claim), so awaiting it
+    // before _completeSwap would deadlock — but both must succeed. Promise.all
+    // also surfaces a payment failure (e.g. insufficient funds) promptly instead
+    // of letting _completeSwap poll until it times out.
+    const payment = Promise.resolve()
+      .then(() => account.payInvoice(response.bolt11_invoice))
+      .catch(err => { throw new Error(`lightning payment failed: ${err?.message ?? err}`) })
+
+    const [{ swap: final, claim }] = await Promise.all([this._completeSwap(client, id), payment])
+
+    const claimTx = final.evm_claim_txid ?? claim.txHash
+    const transactions = []
+    if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
+
+    return { id, hash: claimTx, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
+  }
+
+  /**
    * Executes an EVM -> Arkade swap: create, fund the EVM HTLC from the account
    * (an {@link EvmSigner}) via `client.fundSwap`, then complete. See
    * {@link swidge}.
@@ -283,6 +331,10 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @private
    */
   async _swidgeEvmToArkade (client, account, { source, recipient, options }) {
+    if (!account.address) {
+      throw new SatoraInvalidOptionsError('EVM -> Arkade swidge requires an EvmSigner account (with .address)')
+    }
+
     const { response } = await client.createEvmToArkadeSwapGeneric({
       targetAddress: recipient,
       tokenAddress: source.tokenId,
