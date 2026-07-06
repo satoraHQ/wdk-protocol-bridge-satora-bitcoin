@@ -13,6 +13,7 @@ const mockClient = {
   getQuote: jest.fn(),
   createArkadeToEvmSwapGeneric: jest.fn(),
   createEvmToArkadeSwapGeneric: jest.fn(),
+  createEvmToLightningSwapGeneric: jest.fn(),
   createLightningToEvmSwapGeneric: jest.fn(),
   fundSwap: jest.fn(),
   getSwap: jest.fn(),
@@ -48,6 +49,7 @@ describe('SatoraProtocol', () => {
     mockClient.getQuote.mockReset()
     mockClient.createArkadeToEvmSwapGeneric.mockReset()
     mockClient.createEvmToArkadeSwapGeneric.mockReset()
+    mockClient.createEvmToLightningSwapGeneric.mockReset()
     mockClient.createLightningToEvmSwapGeneric.mockReset()
     mockClient.fundSwap.mockReset()
     mockClient.getSwap.mockReset()
@@ -386,6 +388,68 @@ describe('SatoraProtocol', () => {
       await expect(
         protocol.swidge({ fromToken: 'Lightning:btc', toToken: '42161:0xusdt0', fromTokenAmount: 1000n, recipient: '0xR' })
       ).rejects.toThrow(/lightning payment failed: insufficient balance/)
+    })
+  })
+
+  describe('swidge (EVM -> Lightning)', () => {
+    let account
+
+    beforeEach(() => {
+      account = { address: '0xEvmSigner' }
+      protocol = new SatoraProtocol(account, { accountChains: [42161] })
+
+      mockClient.createEvmToLightningSwapGeneric.mockResolvedValue({
+        response: { id: 'swap-4', source_amount: '1000000', target_amount: '900', fee_sats: 20, evm_fund_txid: null }
+      })
+      mockClient.fundSwap.mockResolvedValue({ txHash: '0xfundtx' })
+      // Server pays the invoice and claims the EVM HTLC — terminal, no client claim.
+      mockClient.getSwap.mockResolvedValue({ status: 'serverredeemed' })
+    })
+
+    test('creates against the invoice, funds the EVM HTLC, and never claims (server does)', async () => {
+      const result = await protocol.swidge({
+        fromToken: '42161:0xusdt0',
+        toToken: 'Lightning:btc',
+        recipient: 'lnbc10u1invoice'
+      })
+
+      expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith({
+        evmChainId: 42161,
+        tokenAddress: '0xusdt0',
+        userAddress: '0xEvmSigner',
+        lightningInvoice: 'lnbc10u1invoice'
+      })
+      expect(mockClient.fundSwap).toHaveBeenCalledWith('swap-4', account)
+      expect(mockClient.claim).not.toHaveBeenCalled()
+
+      expect(result).toEqual({
+        id: 'swap-4',
+        hash: '0xfundtx',
+        fromTokenAmount: 1000000n,
+        toTokenAmount: 900n,
+        fees: [{ type: 'protocol', amount: 20n, token: 'btc', chain: 'Bitcoin', included: true, description: 'Swap fee' }],
+        transactions: [{ hash: '0xfundtx', chain: 42161, type: 'source' }]
+      })
+    })
+
+    test('sends to a lightning address with an explicit sats amount', async () => {
+      await protocol.swidge({
+        fromToken: '42161:0xusdt0',
+        toToken: 'Lightning:btc',
+        recipient: 'user@speed.app',
+        fromTokenAmount: 900n
+      })
+
+      expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith(
+        expect.objectContaining({ lightningAddress: 'user@speed.app', amountSats: 900 })
+      )
+    })
+
+    test('throws for a lightning address without an amount', async () => {
+      await expect(
+        protocol.swidge({ fromToken: '42161:0xusdt0', toToken: 'Lightning:btc', recipient: 'user@speed.app' })
+      ).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.createEvmToLightningSwapGeneric).not.toHaveBeenCalled()
     })
   })
 

@@ -213,9 +213,6 @@ export default class SatoraProtocol extends SwidgeProtocol {
         'swidge requires options.recipient (the destination address); the account is the source wallet'
       )
     }
-    if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
-      throw new SatoraInvalidOptionsError('swidge requires fromTokenAmount (exact-in)')
-    }
 
     // The account funds the source side, so it must operate on the source chain.
     // WDK accounts expose no chain id, so the caller declares the account's
@@ -240,10 +237,13 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (isEvmChain(source.chain) && target.chain === 'Arkade') {
       return this._swidgeEvmToArkade(client, account, { source, recipient, options })
     }
+    if (isEvmChain(source.chain) && target.chain === 'Lightning') {
+      return this._swidgeEvmToLightning(client, account, { source, recipient, options })
+    }
 
     throw new SatoraInvalidOptionsError(
       `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; ` +
-      'only Arkade -> EVM, Lightning -> EVM, and EVM -> Arkade are implemented'
+      'only Arkade -> EVM, Lightning -> EVM, EVM -> Arkade, and EVM -> Lightning are implemented'
     )
   }
 
@@ -257,6 +257,7 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (typeof account.sendTransaction !== 'function') {
       throw new SatoraInvalidOptionsError('Arkade -> EVM swidge requires an Arkade wallet account (with sendTransaction)')
     }
+    requireFromAmount(options, 'Arkade -> EVM')
 
     const { response } = await client.createArkadeToEvmSwapGeneric({
       targetAddress: recipient,
@@ -293,6 +294,7 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (typeof account.payInvoice !== 'function') {
       throw new SatoraInvalidOptionsError('Lightning -> EVM swidge requires a Lightning wallet account (with payInvoice)')
     }
+    requireFromAmount(options, 'Lightning -> EVM')
 
     const { response } = await client.createLightningToEvmSwapGeneric({
       targetAddress: recipient,
@@ -334,6 +336,7 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (!account.address) {
       throw new SatoraInvalidOptionsError('EVM -> Arkade swidge requires an EvmSigner account (with .address)')
     }
+    requireFromAmount(options, 'EVM -> Arkade')
 
     const { response } = await client.createEvmToArkadeSwapGeneric({
       targetAddress: recipient,
@@ -357,6 +360,46 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (claimTx) transactions.push({ hash: claimTx, chain: 'Arkade', type: 'destination' })
 
     return { id, hash: claimTx ?? txHash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
+  }
+
+  /**
+   * Executes an EVM -> Lightning swap: create against the recipient's Lightning
+   * invoice (or address), fund the EVM HTLC from the account (an
+   * {@link EvmSigner}), then wait for settlement. The server pays the lightning invoice
+   * and claims the EVM HTLC, so there is no client claim. See {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeEvmToLightning (client, account, { source, recipient, options }) {
+    if (!account.address) {
+      throw new SatoraInvalidOptionsError('EVM -> Lightning swidge requires an EvmSigner account (with .address)')
+    }
+
+    const { response } = await client.createEvmToLightningSwapGeneric({
+      evmChainId: Number(source.chain),
+      tokenAddress: source.tokenId,
+      userAddress: account.address,
+      ...lightningDestination(recipient, options)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // Fund the EVM HTLC from the EvmSigner. The server then pays the Lightning
+    // invoice and claims the EVM HTLC — there is no client claim, so just wait
+    // for the swap to settle.
+    const { txHash } = await client.fundSwap(id, account)
+    await this._waitForSwapStatus(client, id, TERMINAL_SUCCESS_STATES, TERMINAL_FAIL_STATES)
+
+    return {
+      id,
+      hash: txHash,
+      fees: swapFee(response.fee_sats),
+      transactions: [{ hash: txHash, chain: Number(source.chain), type: 'source' }],
+      fromTokenAmount,
+      toTokenAmount
+    }
   }
 
   /**
@@ -614,6 +657,44 @@ function toSwidgeTransactions (swap) {
     if (swap.evm_claim_txid) transactions.push({ hash: swap.evm_claim_txid, chain: swap.evm_chain_id, type: 'destination' })
   }
   return transactions
+}
+
+/**
+ * Throws unless `fromTokenAmount` (an exact-in source amount) is present.
+ *
+ * @param {SwidgeOptions} options - The swidge options.
+ * @param {string} direction - The direction label, for the error message.
+ */
+function requireFromAmount (options, direction) {
+  if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
+    throw new SatoraInvalidOptionsError(`${direction} swidge requires fromTokenAmount (exact-in)`)
+  }
+}
+
+/**
+ * Resolves a Lightning destination from `options.recipient` into the shape the
+ * SDK expects: a BOLT11 invoice (amount carried by the invoice), a lightning
+ * address, or an LNURL (the latter two require an amount in sats from
+ * `fromTokenAmount`).
+ *
+ * @param {string} recipient - The BOLT11 invoice, lightning address, or LNURL.
+ * @param {SwidgeOptions} options - The swidge options.
+ * @returns {{ lightningInvoice: string } | { lightningAddress: string, amountSats: number } | { lnurl: string, amountSats: number }}
+ */
+function lightningDestination (recipient, options) {
+  if (/^ln(bc|tb|bcrt)/i.test(recipient)) {
+    return { lightningInvoice: recipient }
+  }
+
+  if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
+    throw new SatoraInvalidOptionsError(
+      'a lightning address / LNURL destination requires an amount in sats (fromTokenAmount)'
+    )
+  }
+  const amountSats = Number(options.fromTokenAmount)
+
+  if (/^lnurl/i.test(recipient)) return { lnurl: recipient, amountSats }
+  return { lightningAddress: recipient, amountSats }
 }
 
 /**
