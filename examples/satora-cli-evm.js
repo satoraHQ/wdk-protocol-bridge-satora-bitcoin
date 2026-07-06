@@ -39,7 +39,7 @@
 import { HDKey } from '@scure/bip32'
 import { mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
-import { createPublicClient, createWalletClient, http } from 'viem'
+import { createPublicClient, createWalletClient, formatUnits, http, parseAbi } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { arbitrum, mainnet, polygon } from 'viem/chains'
 
@@ -49,6 +49,15 @@ import SatoraProtocol from '../index.js'
 const EVM_DERIVATION_PATH = "m/44'/60'/0'/0/0"
 
 const CHAINS = { 1: mainnet, 137: polygon, 42161: arbitrum }
+
+// USDT0 token address per chain, for the `balance` command.
+const USDT0_BY_CHAIN = { 42161: '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9' }
+
+const ERC20_ABI = parseAbi([
+  'function balanceOf(address) view returns (uint256)',
+  'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)'
+])
 
 function parseArgs (argv) {
   const flags = {}
@@ -124,7 +133,7 @@ function buildEvmAccount (mnemonic, chainId) {
   const walletClient = createWalletClient({ account, chain, transport })
   const publicClient = createPublicClient({ chain, transport })
 
-  return buildEvmSigner(walletClient, publicClient)
+  return { signer: buildEvmSigner(walletClient, publicClient), publicClient, chain }
 }
 
 async function createProtocol (account, { mnemonic, chainId, dbPath }) {
@@ -156,6 +165,7 @@ Usage:
 
 Commands:
   address           Show the EVM wallet address (--chain <id>, default 42161)
+  balance           Show native + USDT0 balance (--chain <id>, --token <address>)
   swap              Perform an EVM -> Arkade swap:
                       --from <chain:token>    EVM source token (e.g. 42161:0xfd08...)
                       --recipient <address>   Arkade address to receive the BTC
@@ -205,8 +215,33 @@ async function main () {
 
   if (command === 'address') {
     const chainId = Number(flags.chain || 42161)
-    const account = buildEvmAccount(mnemonic, chainId)
-    console.log('EVM wallet:', account.address, `(chain ${chainId})`)
+    const { signer } = buildEvmAccount(mnemonic, chainId)
+    console.log('EVM wallet:', signer.address, `(chain ${chainId})`)
+    process.exit(0)
+  }
+
+  if (command === 'balance') {
+    const chainId = Number(flags.chain || 42161)
+    const { signer, publicClient, chain } = buildEvmAccount(mnemonic, chainId)
+    const tokenAddress = flags.token || USDT0_BY_CHAIN[chainId]
+
+    console.log('EVM wallet:', signer.address, `(chain ${chainId})`)
+
+    const native = await publicClient.getBalance({ address: signer.address })
+    console.log(`  native: ${formatUnits(native, chain.nativeCurrency.decimals)} ${chain.nativeCurrency.symbol}`)
+
+    if (tokenAddress) {
+      const contract = { address: tokenAddress, abi: ERC20_ABI }
+      const [bal, decimals, symbol] = await Promise.all([
+        publicClient.readContract({ ...contract, functionName: 'balanceOf', args: [signer.address] }),
+        publicClient.readContract({ ...contract, functionName: 'decimals' }),
+        publicClient.readContract({ ...contract, functionName: 'symbol' })
+      ])
+      console.log(`  ${symbol}: ${formatUnits(bal, decimals)} (${tokenAddress})`)
+    } else {
+      console.log(`  (no USDT0 known for chain ${chainId}; pass --token <address>)`)
+    }
+
     process.exit(0)
   }
 
@@ -222,15 +257,15 @@ async function main () {
   }
 
   const chainId = Number(flags.from.split(':')[0])
-  const account = buildEvmAccount(mnemonic, chainId)
-  const protocol = await createProtocol(account, { mnemonic, chainId, dbPath })
+  const { signer } = buildEvmAccount(mnemonic, chainId)
+  const protocol = await createProtocol(signer, { mnemonic, chainId, dbPath })
 
   // Look up the source token's decimals to convert the human amount.
   const info = (await protocol.getSupportedTokens()).find(t => t.token === flags.from)
   if (!info) throw new Error(`unknown token ${flags.from} — run: node examples/satora-cli.js tokens`)
   const amountUnits = parseUnits(flags.amount, info.decimals)
 
-  console.log('EVM wallet:', account.address, `(chain ${chainId})`)
+  console.log('EVM wallet:', signer.address, `(chain ${chainId})`)
   console.log(`\nSwapping ${flags.amount} ${info.symbol} -> BTC (Arkade) for ${flags.recipient} ...`)
   console.log('(this funds the EVM HTLC, then drives the whole flow — it can take a little while)\n')
 
