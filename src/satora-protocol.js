@@ -47,6 +47,7 @@ import { SatoraInvalidOptionsError } from './errors.js'
  * @property {Object} [signerStorage] - A satora `WalletStorage` adapter persisting the seed / key index (the swap client's database). Recommended for fund-moving operations so an interrupted swap survives a restart. Omit for in-memory (not recoverable across restarts).
  * @property {Object} [swapStorage] - A satora `SwapStorage` adapter persisting per-swap state for recovery/refund.
  * @property {(string | number)[]} [accountChains] - The chains the provided wallet account can fund/operate on (e.g. ['Arkade'] for an Arkade wallet, or [1, 137, 42161] for an EVM wallet). When set, `swidge` validates that the source chain is one of these.
+ * @property {number} [feeRateSatPerVb] - Fee rate (sat/vB) for the on-chain Bitcoin claim of an EVM -> Bitcoin swap. Defaults to the SDK's default.
  */
 
 export default class SatoraProtocol extends SwidgeProtocol {
@@ -231,11 +232,17 @@ export default class SatoraProtocol extends SwidgeProtocol {
     if (source.chain === 'Arkade' && isEvmChain(targetChain)) {
       return this._swidgeArkadeToEvm(client, account, { target, targetChain, recipient, options })
     }
+    if (source.chain === 'Bitcoin' && isEvmChain(targetChain)) {
+      return this._swidgeBitcoinToEvm(client, account, { target, targetChain, recipient, options })
+    }
     if (source.chain === 'Lightning' && isEvmChain(targetChain)) {
       return this._swidgeLightningToEvm(client, account, { target, targetChain, recipient, options })
     }
     if (isEvmChain(source.chain) && target.chain === 'Arkade') {
       return this._swidgeEvmToArkade(client, account, { source, recipient, options })
+    }
+    if (isEvmChain(source.chain) && target.chain === 'Bitcoin') {
+      return this._swidgeEvmToBitcoin(client, account, { source, recipient, options })
     }
     if (isEvmChain(source.chain) && target.chain === 'Lightning') {
       return this._swidgeEvmToLightning(client, account, { source, recipient, options })
@@ -243,7 +250,7 @@ export default class SatoraProtocol extends SwidgeProtocol {
 
     throw new SatoraInvalidOptionsError(
       `unsupported swidge direction ${source.chain ?? '?'} -> ${targetChain}; ` +
-      'only Arkade -> EVM, Lightning -> EVM, EVM -> Arkade, and EVM -> Lightning are implemented'
+      'implemented: Arkade/Bitcoin/Lightning -> EVM, and EVM -> Arkade/Bitcoin/Lightning'
     )
   }
 
@@ -277,6 +284,43 @@ export default class SatoraProtocol extends SwidgeProtocol {
 
     const claimTx = final.evm_claim_txid ?? claim.txHash
     const transactions = [{ hash: funding.hash, chain: 'Arkade', type: 'source' }]
+    if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
+
+    return { id, hash: claimTx ?? funding.hash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
+  }
+
+  /**
+   * Executes a Bitcoin (on-chain) -> EVM swap: create, fund the on-chain BTC
+   * HTLC from the account, then complete (gasless EVM claim). Like Arkade -> EVM
+   * but the source funding confirms on-chain, so it uses a longer timeout. See
+   * {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeBitcoinToEvm (client, account, { target, targetChain, recipient, options }) {
+    if (typeof account.sendTransaction !== 'function') {
+      throw new SatoraInvalidOptionsError('Bitcoin -> EVM swidge requires a Bitcoin wallet account (with sendTransaction)')
+    }
+    requireFromAmount(options, 'Bitcoin -> EVM')
+
+    const { response } = await client.createBitcoinToEvmSwap({
+      targetAddress: recipient,
+      tokenAddress: target.tokenId,
+      evmChainId: Number(targetChain),
+      sourceAmount: Number(options.fromTokenAmount)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // Fund the on-chain Bitcoin HTLC from the source account.
+    const funding = await account.sendTransaction({ to: response.btc_htlc_address, value: fromTokenAmount })
+
+    const { swap: final, claim } = await this._completeSwap(client, id, { timeoutMs: BTC_ONCHAIN_TIMEOUT_MS })
+
+    const claimTx = final.evm_claim_txid ?? claim.txHash
+    const transactions = [{ hash: funding.hash, chain: 'Bitcoin', type: 'source' }]
     if (claimTx) transactions.push({ hash: claimTx, chain: Number(targetChain), type: 'destination' })
 
     return { id, hash: claimTx ?? funding.hash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
@@ -363,6 +407,46 @@ export default class SatoraProtocol extends SwidgeProtocol {
   }
 
   /**
+   * Executes an EVM -> Bitcoin (on-chain) swap: create against the recipient's
+   * BTC address, fund the EVM HTLC via `client.fundSwap`, then complete. The
+   * client claims the BTC HTLC to the recipient (`destinationAddress`), paying
+   * the on-chain claim fee at `config.feeRateSatPerVb`. See {@link swidge}.
+   *
+   * @private
+   */
+  async _swidgeEvmToBitcoin (client, account, { source, recipient, options }) {
+    if (!account.address) {
+      throw new SatoraInvalidOptionsError('EVM -> Bitcoin swidge requires an EvmSigner account (with .address)')
+    }
+    requireFromAmount(options, 'EVM -> Bitcoin')
+
+    const { response } = await client.createEvmToBitcoinSwap({
+      targetAddress: recipient,
+      tokenAddress: source.tokenId,
+      evmChainId: Number(source.chain),
+      userAddress: account.address,
+      sourceAmount: BigInt(options.fromTokenAmount)
+    })
+
+    const id = response.id
+    const fromTokenAmount = BigInt(response.source_amount)
+    const toTokenAmount = BigInt(response.target_amount)
+
+    // Fund the EVM HTLC, then claim the BTC HTLC on-chain to the recipient.
+    const { txHash } = await client.fundSwap(id, account)
+    const { swap: final, claim } = await this._completeSwap(
+      client, id, { timeoutMs: BTC_ONCHAIN_TIMEOUT_MS },
+      { destinationAddress: recipient, feeRateSatPerVb: this._config.feeRateSatPerVb }
+    )
+
+    const claimTx = final.btc_claim_txid ?? claim.txHash
+    const transactions = [{ hash: txHash, chain: Number(source.chain), type: 'source' }]
+    if (claimTx) transactions.push({ hash: claimTx, chain: 'Bitcoin', type: 'destination' })
+
+    return { id, hash: claimTx ?? txHash, fees: swapFee(response.fee_sats), transactions, fromTokenAmount, toTokenAmount }
+  }
+
+  /**
    * Executes an EVM -> Lightning swap: create against the recipient's Lightning
    * invoice (or address), fund the EVM HTLC from the account (an
    * {@link EvmSigner}), then wait for settlement. The server pays the lightning invoice
@@ -441,13 +525,14 @@ export default class SatoraProtocol extends SwidgeProtocol {
    * @param {SatoraClient} client - The satora swap client.
    * @param {string} id - The swap id.
    * @param {{ timeoutMs?: number, intervalMs?: number }} [waitOpts] - Polling overrides.
+   * @param {import('@satora/swap').ClaimOptions} [claimOptions] - Claim options (e.g. a Bitcoin `destinationAddress` + `feeRateSatPerVb` for EVM -> Bitcoin).
    * @returns {Promise<{ swap: Object, claim: Object }>} The settled swap and the claim result.
    * @throws {Error} If the claim fails or the swap reaches a failure state.
    */
-  async _completeSwap (client, id, waitOpts = {}) {
+  async _completeSwap (client, id, waitOpts = {}, claimOptions) {
     await this._waitForSwapStatus(client, id, SERVER_FUNDED_STATES, FUND_FAIL_STATES, waitOpts)
 
-    const claim = await client.claim(id)
+    const claim = await client.claim(id, claimOptions)
     if (!claim.success) {
       throw new Error(`satora claim failed for swap ${id}: ${claim.message}`)
     }
@@ -505,7 +590,13 @@ export default class SatoraProtocol extends SwidgeProtocol {
       return { id, status: 'completed', transactions: toSwidgeTransactions(existing) }
     }
 
-    const { swap } = await this._completeSwap(client, id, waitOpts)
+    // An EVM -> Bitcoin claim pays out on-chain, so it needs the recorded BTC
+    // destination (and honours the configured fee rate).
+    const claimOptions = existing.target_btc_address
+      ? { destinationAddress: existing.target_btc_address, feeRateSatPerVb: this._config.feeRateSatPerVb }
+      : undefined
+
+    const { swap } = await this._completeSwap(client, id, waitOpts, claimOptions)
     return { id, status: 'completed', transactions: toSwidgeTransactions(swap) }
   }
 
@@ -600,6 +691,10 @@ export default class SatoraProtocol extends SwidgeProtocol {
 const FEE_TOKEN = 'btc'
 const FEE_CHAIN = 'Bitcoin'
 
+// On-chain Bitcoin funding/claims confirm on the Bitcoin network, which is much
+// slower than Arkade/Lightning, so those directions poll for longer.
+const BTC_ONCHAIN_TIMEOUT_MS = 3600000
+
 // Swap status groupings for driving the Arkade -> EVM flow (satora SwapStatus
 // state machine).
 const SERVER_FUNDED_STATES = ['serverfunded']
@@ -649,12 +744,20 @@ function toSwidgeStatus (status) {
  */
 function toSwidgeTransactions (swap) {
   const transactions = []
-  if (swap.direction === 'evm_to_arkade') {
-    if (swap.evm_fund_txid) transactions.push({ hash: swap.evm_fund_txid, chain: swap.evm_chain_id, type: 'source' })
-    if (swap.btc_claim_txid) transactions.push({ hash: swap.btc_claim_txid, chain: 'Arkade', type: 'destination' })
+  const direction = swap.direction ?? ''
+  const evmChain = swap.evm_chain_id
+
+  if (direction.startsWith('evm_to_')) {
+    // EVM source funds the HTLC; the BTC/Arkade side is the destination.
+    if (swap.evm_fund_txid) transactions.push({ hash: swap.evm_fund_txid, chain: evmChain, type: 'source' })
+    const destChain = direction === 'evm_to_bitcoin' ? 'Bitcoin' : 'Arkade'
+    if (swap.btc_claim_txid) transactions.push({ hash: swap.btc_claim_txid, chain: destChain, type: 'destination' })
   } else {
-    if (swap.btc_fund_txid) transactions.push({ hash: swap.btc_fund_txid, chain: 'Arkade', type: 'source' })
-    if (swap.evm_claim_txid) transactions.push({ hash: swap.evm_claim_txid, chain: swap.evm_chain_id, type: 'destination' })
+    // *_to_evm: the BTC/Arkade side funds, the EVM side is the destination.
+    // Default to Arkade when the direction is absent (back-compat).
+    const srcChain = direction === 'bitcoin_to_evm' ? 'Bitcoin' : 'Arkade'
+    if (swap.btc_fund_txid) transactions.push({ hash: swap.btc_fund_txid, chain: srcChain, type: 'source' })
+    if (swap.evm_claim_txid) transactions.push({ hash: swap.evm_claim_txid, chain: evmChain, type: 'destination' })
   }
   return transactions
 }

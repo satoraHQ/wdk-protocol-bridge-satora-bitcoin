@@ -12,7 +12,9 @@ const mockClient = {
   getTokens: jest.fn(),
   getQuote: jest.fn(),
   createArkadeToEvmSwapGeneric: jest.fn(),
+  createBitcoinToEvmSwap: jest.fn(),
   createEvmToArkadeSwapGeneric: jest.fn(),
+  createEvmToBitcoinSwap: jest.fn(),
   createEvmToLightningSwapGeneric: jest.fn(),
   createLightningToEvmSwapGeneric: jest.fn(),
   fundSwap: jest.fn(),
@@ -48,7 +50,9 @@ describe('SatoraProtocol', () => {
     mockClient.getTokens.mockReset()
     mockClient.getQuote.mockReset()
     mockClient.createArkadeToEvmSwapGeneric.mockReset()
+    mockClient.createBitcoinToEvmSwap.mockReset()
     mockClient.createEvmToArkadeSwapGeneric.mockReset()
+    mockClient.createEvmToBitcoinSwap.mockReset()
     mockClient.createEvmToLightningSwapGeneric.mockReset()
     mockClient.createLightningToEvmSwapGeneric.mockReset()
     mockClient.fundSwap.mockReset()
@@ -206,7 +210,7 @@ describe('SatoraProtocol', () => {
       expect(account.sendTransaction).toHaveBeenCalledWith({ to: 'ark1qvhtlc', value: 100000n })
 
       // Gasless claim by swap id.
-      expect(mockClient.claim).toHaveBeenCalledWith('swap-1')
+      expect(mockClient.claim).toHaveBeenCalledWith('swap-1', undefined)
 
       expect(result).toEqual({
         id: 'swap-1',
@@ -453,6 +457,65 @@ describe('SatoraProtocol', () => {
     })
   })
 
+  describe('swidge (Bitcoin <-> EVM, on-chain)', () => {
+    test('Bitcoin -> EVM funds the on-chain HTLC and claims (gasless)', async () => {
+      const account = {
+        getAddress: jest.fn().mockResolvedValue('bc1qsource'),
+        sendTransaction: jest.fn().mockResolvedValue({ hash: 'btcfundtx' })
+      }
+      protocol = new SatoraProtocol(account, { accountChains: ['Bitcoin'] })
+
+      mockClient.createBitcoinToEvmSwap.mockResolvedValue({
+        response: { id: 'swap-5', btc_htlc_address: 'bc1qhtlc', source_amount: '200000', target_amount: '116000000', fee_sats: 400 }
+      })
+      mockClient.claim.mockResolvedValue({ success: true, message: 'ok', txHash: '0xclaimtx' })
+      mockClient.getSwap
+        .mockResolvedValueOnce({ status: 'serverfunded' })
+        .mockResolvedValue({ status: 'serverredeemed', evm_claim_txid: '0xevmclaim', evm_chain_id: 42161 })
+
+      const result = await protocol.swidge({
+        fromToken: 'Bitcoin:btc', toToken: '42161:0xusdt0', fromTokenAmount: 200000n, recipient: '0xRecipient'
+      })
+
+      expect(mockClient.createBitcoinToEvmSwap).toHaveBeenCalledWith({
+        targetAddress: '0xRecipient', tokenAddress: '0xusdt0', evmChainId: 42161, sourceAmount: 200000
+      })
+      expect(account.sendTransaction).toHaveBeenCalledWith({ to: 'bc1qhtlc', value: 200000n })
+      expect(result.transactions).toEqual([
+        { hash: 'btcfundtx', chain: 'Bitcoin', type: 'source' },
+        { hash: '0xevmclaim', chain: 42161, type: 'destination' }
+      ])
+    })
+
+    test('EVM -> Bitcoin funds via fundSwap and claims to the BTC address with a fee rate', async () => {
+      const account = { address: '0xEvmSigner' }
+      protocol = new SatoraProtocol(account, { accountChains: [42161], feeRateSatPerVb: 7 })
+
+      mockClient.createEvmToBitcoinSwap.mockResolvedValue({
+        response: { id: 'swap-6', source_amount: '1000000', target_amount: '1450', fee_sats: 30 }
+      })
+      mockClient.fundSwap.mockResolvedValue({ txHash: '0xfundtx' })
+      mockClient.claim.mockResolvedValue({ success: true, message: 'ok', txHash: 'btcclaimtx' })
+      mockClient.getSwap
+        .mockResolvedValueOnce({ status: 'serverfunded' })
+        .mockResolvedValue({ status: 'serverredeemed', direction: 'evm_to_bitcoin', evm_chain_id: 42161, evm_fund_txid: '0xfundtx', btc_claim_txid: 'btcclaimtx' })
+
+      const result = await protocol.swidge({
+        fromToken: '42161:0xusdt0', toToken: 'Bitcoin:btc', fromTokenAmount: 1000000n, recipient: 'bc1qdest'
+      })
+
+      expect(mockClient.createEvmToBitcoinSwap).toHaveBeenCalledWith({
+        targetAddress: 'bc1qdest', tokenAddress: '0xusdt0', evmChainId: 42161, userAddress: '0xEvmSigner', sourceAmount: 1000000n
+      })
+      expect(mockClient.fundSwap).toHaveBeenCalledWith('swap-6', account)
+      expect(mockClient.claim).toHaveBeenCalledWith('swap-6', { destinationAddress: 'bc1qdest', feeRateSatPerVb: 7 })
+      expect(result.transactions).toEqual([
+        { hash: '0xfundtx', chain: 42161, type: 'source' },
+        { hash: 'btcclaimtx', chain: 'Bitcoin', type: 'destination' }
+      ])
+    })
+  })
+
   describe('getSwidgeStatus', () => {
     test('maps a settled swap to completed with source/destination transactions', async () => {
       mockClient.getSwap.mockResolvedValue({
@@ -529,7 +592,7 @@ describe('SatoraProtocol', () => {
 
       const result = await protocol.resumeSwidge('swap-1')
 
-      expect(mockClient.claim).toHaveBeenCalledWith('swap-1')
+      expect(mockClient.claim).toHaveBeenCalledWith('swap-1', undefined)
       expect(result.status).toBe('completed')
     })
 
