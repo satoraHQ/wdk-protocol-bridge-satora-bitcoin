@@ -20,7 +20,9 @@ const mockClient = {
   fundSwap: jest.fn(),
   getSwap: jest.fn(),
   claim: jest.fn(),
-  refundSwap: jest.fn()
+  refundSwap: jest.fn(),
+  refundEvmWithSigner: jest.fn(),
+  collabRefundEvmWithSigner: jest.fn()
 }
 
 jest.unstable_mockModule('@satora/swap', () => ({
@@ -59,6 +61,8 @@ describe('SatoraProtocol', () => {
     mockClient.getSwap.mockReset()
     mockClient.claim.mockReset()
     mockClient.refundSwap.mockReset()
+    mockClient.refundEvmWithSigner.mockReset()
+    mockClient.collabRefundEvmWithSigner.mockReset()
 
     // Discovery methods do not require an account.
     protocol = new SatoraProtocol()
@@ -644,6 +648,40 @@ describe('SatoraProtocol', () => {
       mockClient.getSwap.mockResolvedValue({ status: 'serverfunded' })
 
       await expect(protocol.refundSwidge('swap-1')).rejects.toThrow('too early to refund')
+    })
+
+    test('EVM-sourced swap refunds via the collaborative signer path (gasless, swap-back)', async () => {
+      const evmAccount = { address: '0xEvmSigner' }
+      protocol = new SatoraProtocol(evmAccount)
+      mockClient.getSwap.mockResolvedValue({ status: 'expired', direction: 'evm_to_bitcoin', evm_chain_id: 42161 })
+      mockClient.collabRefundEvmWithSigner.mockResolvedValue({ txHash: '0xrefundtx' })
+
+      const result = await protocol.refundSwidge('swap-1')
+
+      expect(mockClient.collabRefundEvmWithSigner).toHaveBeenCalledWith('swap-1', evmAccount, 'swap-back')
+      expect(mockClient.refundSwap).not.toHaveBeenCalled()
+      expect(result.status).toBe('refunded')
+      expect(result.transactions).toContainEqual({ hash: '0xrefundtx', chain: 42161, type: 'refund' })
+    })
+
+    test('EVM-sourced refund honours options.manual and options.settlement', async () => {
+      const evmAccount = { address: '0xEvmSigner' }
+      protocol = new SatoraProtocol(evmAccount)
+      mockClient.getSwap.mockResolvedValue({ status: 'expired', direction: 'evm_to_arkade', evm_chain_id: 42161 })
+      mockClient.refundEvmWithSigner.mockResolvedValue({ txHash: '0xrefundtx' })
+
+      await protocol.refundSwidge('swap-1', { manual: true, settlement: 'direct' })
+
+      expect(mockClient.refundEvmWithSigner).toHaveBeenCalledWith('swap-1', evmAccount, 'direct')
+      expect(mockClient.collabRefundEvmWithSigner).not.toHaveBeenCalled()
+    })
+
+    test('Lightning-sourced swap cannot be refunded', async () => {
+      mockClient.getSwap.mockResolvedValue({ status: 'expired', direction: 'lightning_to_evm' })
+
+      await expect(protocol.refundSwidge('swap-1')).rejects.toThrow(SatoraInvalidOptionsError)
+      expect(mockClient.refundSwap).not.toHaveBeenCalled()
+      expect(mockClient.collabRefundEvmWithSigner).not.toHaveBeenCalled()
     })
   })
 
