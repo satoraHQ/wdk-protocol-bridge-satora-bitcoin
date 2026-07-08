@@ -34,6 +34,10 @@
 //     --from 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
 //     --recipient ark1q... \
 //     --amount 1.5
+//   # EVM -> Bitcoin (on-chain; recipient is a BTC address)
+//   node --env-file=examples/.env examples/satora-cli-evm.js swap \
+//     --from 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
+//     --to Bitcoin:btc --recipient bc1q... --amount 1.5 --fee-rate 5
 //   # EVM -> Lightning (recipient is a BOLT11 invoice, e.g. from satora-cli-spark.js invoice)
 //   node --env-file=examples/.env examples/satora-cli-evm.js swap \
 //     --from 42161:0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9 \
@@ -141,13 +145,14 @@ function buildEvmAccount (mnemonic, chainId) {
   return { signer: buildEvmSigner(walletClient, publicClient), publicClient, chain }
 }
 
-async function createProtocol (account, { mnemonic, chainId, dbPath }) {
+async function createProtocol (account, { mnemonic, chainId, dbPath, feeRateSatPerVb }) {
   const { signerStorage, swapStorage } = await createStorage(dbPath)
   return new SatoraProtocol(account, {
     mnemonic,
     arkadeServerUrl: process.env.SATORA_ARKADE_SERVER || 'https://arkade.computer',
     esploraUrl: process.env.SATORA_ESPLORA || 'https://mempool.space/api',
     ...(chainId ? { accountChains: [chainId] } : {}),
+    ...(feeRateSatPerVb ? { feeRateSatPerVb } : {}),
     ...(process.env.SATORA_BASE_URL ? { baseUrl: process.env.SATORA_BASE_URL } : {}),
     signerStorage,
     swapStorage
@@ -171,11 +176,12 @@ Usage:
 Commands:
   address           Show the EVM wallet address (--chain <id>, default 42161)
   balance           Show native + USDT0 balance (--chain <id>, --token <address>)
-  swap              Perform an EVM -> Arkade or EVM -> Lightning swap:
+  swap              Perform an EVM -> Arkade / Bitcoin / Lightning swap:
                       --from <chain:token>    EVM source token (e.g. 42161:0xfd08...)
-                      --to <chain:token>      destination (default Arkade:btc; or Lightning:btc)
-                      --recipient <address>   Arkade address, or a BOLT11 invoice for Lightning
-                      --amount <units>        source-token units (Arkade only; Lightning uses the invoice)
+                      --to <chain:token>      destination (default Arkade:btc; Bitcoin:btc; Lightning:btc)
+                      --recipient <address>   Arkade/Bitcoin address, or a BOLT11 invoice for Lightning
+                      --amount <units>        source-token units (Arkade/Bitcoin; Lightning uses the invoice)
+                      --fee-rate <sat/vB>     on-chain Bitcoin claim fee rate (Bitcoin only; or SATORA_BTC_FEE_RATE)
   status <swap-id>  Show the status of a swap by id
   resume <swap-id>  Drive an interrupted swap to completion (throws if it cannot)
 
@@ -199,6 +205,9 @@ async function main () {
   }
 
   const dbPath = process.env.SATORA_DB || './.satora.db'
+  const feeRateSatPerVb = flags['fee-rate'] !== undefined && flags['fee-rate'] !== true
+    ? Number(flags['fee-rate'])
+    : (process.env.SATORA_BTC_FEE_RATE ? Number(process.env.SATORA_BTC_FEE_RATE) : undefined)
 
   // status/resume are read-only of the wallet — no EVM signer needed.
   if (command === 'status' || command === 'resume') {
@@ -208,7 +217,7 @@ async function main () {
       process.exit(1)
     }
 
-    const protocol = await createProtocol(undefined, { mnemonic, dbPath })
+    const protocol = await createProtocol(undefined, { mnemonic, dbPath, feeRateSatPerVb })
     if (command === 'status') {
       printResult(await protocol.getSwidgeStatus(swapId))
     } else {
@@ -267,12 +276,13 @@ async function main () {
 
   const chainId = Number(flags.from.split(':')[0])
   const { signer } = buildEvmAccount(mnemonic, chainId)
-  const protocol = await createProtocol(signer, { mnemonic, chainId, dbPath })
+  const protocol = await createProtocol(signer, { mnemonic, chainId, dbPath, feeRateSatPerVb })
 
-  const info = (await protocol.getSupportedTokens()).find(t => t.token === flags.from)
+  const info = (await protocol.getSupportedTokens()).find(t => t.token.toLowerCase() === flags.from.toLowerCase())
   if (!info) throw new Error(`unknown token ${flags.from} — run: node examples/satora-cli.js tokens`)
 
-  const swapOptions = { fromToken: flags.from, toToken, recipient: flags.recipient }
+  // Use the canonical token id (normalises the address case).
+  const swapOptions = { fromToken: info.token, toToken, recipient: flags.recipient }
   if (toLightning) {
     // EVM -> Lightning: the recipient is a BOLT11 invoice that carries the amount.
     if (!flags.recipient.toLowerCase().startsWith('ln')) {
