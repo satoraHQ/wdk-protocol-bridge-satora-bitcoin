@@ -184,6 +184,10 @@ Commands:
                       --fee-rate <sat/vB>     on-chain Bitcoin claim fee rate (Bitcoin only; or SATORA_BTC_FEE_RATE)
   status <swap-id>  Show the status of a swap by id
   resume <swap-id>  Drive an interrupted swap to completion (throws if it cannot)
+  refund <swap-id>  Reclaim an EVM-sourced swap that cannot complete
+                      --chain <id>            EVM chain (default 42161)
+                      --manual                timelock refund (default: gasless collaborative)
+                      --settlement <mode>     swap-back (default) or direct (WBTC)
 
 The EVM wallet needs the source token plus a little native gas.
 Config comes from examples/.env (copy from examples/.env.example).`)
@@ -256,6 +260,26 @@ async function main () {
     } else {
       console.log(`  (no USDT0 known for chain ${chainId}; pass --token <address>)`)
     }
+
+    process.exit(0)
+  }
+
+  if (command === 'refund') {
+    const swapId = argv[1] && !argv[1].startsWith('--') ? argv[1] : undefined
+    if (!swapId) {
+      console.error('refund requires a swap id: refund <swap-id> [--chain <id>] [--manual] [--settlement swap-back|direct]')
+      process.exit(1)
+    }
+
+    const chainId = Number(flags.chain || 42161)
+    const { signer } = buildEvmAccount(mnemonic, chainId)
+    const protocol = await createProtocol(signer, { mnemonic, chainId, dbPath, feeRateSatPerVb })
+
+    console.log(`Refunding swap ${swapId} to ${signer.address} ...`)
+    printResult(await protocol.refundSwidge(swapId, {
+      ...(flags.manual ? { manual: true } : {}),
+      ...(typeof flags.settlement === 'string' ? { settlement: flags.settlement } : {})
+    }))
 
     process.exit(0)
   }
