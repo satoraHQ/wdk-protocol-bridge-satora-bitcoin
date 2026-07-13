@@ -1,5 +1,8 @@
 # @satora/wdk-protocol-swidge-satora
 
+[![build](https://github.com/satoraHQ/wdk-protocol-bridge-satora-bitcoin/actions/workflows/build.yml/badge.svg)](https://github.com/satoraHQ/wdk-protocol-bridge-satora-bitcoin/actions/workflows/build.yml)
+[![Built with WDK](assets/built-with-wdk.png)](https://github.com/tetherto/wdk)
+
 A [WDK](https://github.com/tetherto/wdk) swidge protocol that performs
 cross-chain atomic swaps via the [Satora](https://docs.satora.io/) protocol —
 BTC (on-chain), Arkade, and Lightning on one side, EVM tokens on the other.
