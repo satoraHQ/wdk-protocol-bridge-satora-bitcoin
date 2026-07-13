@@ -1,5 +1,6 @@
 # @satora/wdk-protocol-swidge-satora
 
+[![build](https://github.com/satoraHQ/wdk-protocol-bridge-satora-bitcoin/actions/workflows/build.yml/badge.svg)](https://github.com/satoraHQ/wdk-protocol-bridge-satora-bitcoin/actions/workflows/build.yml)
 [![Built with WDK](assets/built-with-wdk.png)](https://github.com/tetherto/wdk)
 
 A [WDK](https://github.com/tetherto/wdk) swidge protocol that performs
