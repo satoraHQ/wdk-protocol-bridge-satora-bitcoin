@@ -44,7 +44,7 @@ jest.unstable_mockModule('@satora/swap', () => ({
 
 const { default: SatoraProtocol } = await import('../index.js')
 
-describe('SatoraProtocol', () => {
+describe('@satora/wdk-protocol-swidge-satora', () => {
   let protocol
 
   beforeEach(() => {
@@ -118,10 +118,14 @@ describe('SatoraProtocol', () => {
         toTokenAmount: 40000n
       })
 
-      expect(mockClient.getQuote).toHaveBeenCalledWith(
-        expect.objectContaining({ targetAmount: 40000 })
-      )
-      expect(mockClient.getQuote.mock.calls[0][0]).not.toHaveProperty('sourceAmount')
+      // Exact-out passes targetAmount and no sourceAmount.
+      expect(mockClient.getQuote).toHaveBeenCalledWith({
+        sourceChain: 'Bitcoin',
+        sourceToken: 'btc',
+        targetChain: '42161',
+        targetToken: '0xusdt0',
+        targetAmount: 40000
+      })
       expect(quote.toTokenAmount).toBe(40000n)
     })
 
@@ -132,9 +136,13 @@ describe('SatoraProtocol', () => {
         fromTokenAmount: 1000000n
       })
 
-      expect(mockClient.getQuote).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceChain: 'Lightning', sourceToken: 'btc' })
-      )
+      expect(mockClient.getQuote).toHaveBeenCalledWith({
+        sourceChain: 'Lightning',
+        sourceToken: 'btc',
+        targetChain: '42161',
+        targetToken: '0xusdt0',
+        sourceAmount: 1000000
+      })
     })
 
     test('applies slippage (option, then config.defaultSlippage) to the minimum', async () => {
@@ -448,9 +456,13 @@ describe('SatoraProtocol', () => {
         fromTokenAmount: 900n
       })
 
-      expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith(
-        expect.objectContaining({ lightningAddress: 'user@speed.app', amountSats: 900 })
-      )
+      expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith({
+        evmChainId: 42161,
+        tokenAddress: '0xusdt0',
+        userAddress: '0xEvmSigner',
+        lightningAddress: 'user@speed.app',
+        amountSats: 900
+      })
     })
 
     test('throws for a lightning address without an amount', async () => {

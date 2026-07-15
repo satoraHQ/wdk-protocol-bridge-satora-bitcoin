@@ -3,8 +3,9 @@ name: build
 on:
   push:
     branches: [main]
+  # Run on every pull request regardless of its base branch (so review PRs
+  # against non-main bases also get lint + tests).
   pull_request:
-    branches: [main]
 
 jobs:
   build:

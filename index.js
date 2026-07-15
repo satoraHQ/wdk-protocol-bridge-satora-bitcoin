@@ -38,3 +38,4 @@
 /** @typedef {import('./src/satora-protocol.js').SatoraProtocolConfig} SatoraProtocolConfig */
 
 export { default } from './src/satora-protocol.js'
+export { SatoraInvalidOptionsError } from './src/errors.js'
