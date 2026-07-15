@@ -29,12 +29,12 @@
     ]
   },
   "dependencies": {
-    "@satora/swap": "^0.0.4",
+    "@satora/swap": "^0.0.5",
     "@tetherto/wdk-wallet": "^1.0.0-beta.14",
-    "bare-node-runtime": "^1.1.4"
+    "bare-node-runtime": "^1.5.0"
   },
   "devDependencies": {
-    "@arkade-os/sdk": "^0.4.40",
+    "@arkade-os/sdk": "^0.4.45",
     "@buildonspark/spark-sdk": "^0.8.8",
     "@scure/bip32": "^2.2.0",
     "@scure/bip39": "^2.2.0",
@@ -44,7 +44,7 @@
     "jest": "^30.4.2",
     "standard": "^17.1.2",
     "typescript": "^7.0.2",
-    "viem": "^2.54.1"
+    "viem": "^2.55.2"
   },
   "exports": {
     ".": {
