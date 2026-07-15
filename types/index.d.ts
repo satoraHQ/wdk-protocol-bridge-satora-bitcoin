@@ -1,4 +1,5 @@
 export { default } from "./src/satora-protocol.js";
+export { SatoraInvalidOptionsError } from "./src/errors.js";
 export type SwapOptions = import("@tetherto/wdk-wallet/protocols").SwapOptions;
 export type SwapResult = import("@tetherto/wdk-wallet/protocols").SwapResult;
 export type BridgeOptions = import("@tetherto/wdk-wallet/protocols").BridgeOptions;
