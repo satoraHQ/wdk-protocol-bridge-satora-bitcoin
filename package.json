@@ -1,0 +1,65 @@
+{
+  "name": "@satora/wdk-protocol-swidge-satora",
+  "version": "1.0.0-beta.1",
+  "description": "WDK module to perform cross-chain swaps via the satora protocol.",
+  "keywords": [
+    "wdk",
+    "protocol",
+    "swidge",
+    "satora"
+  ],
+  "author": "bonomat &lt;philipp@lendasat.com&gt;",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "type": "module",
+  "types": "./types",
+  "scripts": {
+    "build:types": "tsc",
+    "lint": "standard",
+    "lint:fix": "standard --fix",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:integration": "node --test tests/*.integration.test.js",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "example": "node examples/satora-cli.js"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.integration\\.test\\.js$"
+    ]
+  },
+  "dependencies": {
+    "@satora/swap": "^0.0.5",
+    "@tetherto/wdk-wallet": "^1.0.0-beta.14",
+    "bare-node-runtime": "^1.5.0"
+  },
+  "devDependencies": {
+    "@arkade-os/sdk": "^0.4.45",
+    "@buildonspark/spark-sdk": "^0.8.8",
+    "@scure/bip32": "^2.2.0",
+    "@scure/bip39": "^2.2.0",
+    "@scure/btc-signer": "^2.2.0",
+    "cross-env": "^10.1.0",
+    "eventsource": "^4.1.0",
+    "jest": "^30.4.2",
+    "standard": "^17.1.2",
+    "typescript": "^7.0.2",
+    "viem": "^2.55.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "bare": "./bare.js",
+      "default": "./index.js"
+    },
+    "./package": {
+      "default": "./package.json"
+    }
+  },
+  "standard": {
+    "ignore": [
+      "bare.js",
+      "tests/**/*.js"
+    ]
+  }
+}
