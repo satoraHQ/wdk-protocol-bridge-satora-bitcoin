@@ -453,7 +453,7 @@ describe('@satora/wdk-protocol-swidge-satora', () => {
         fromToken: '42161:0xusdt0',
         toToken: 'Lightning:btc',
         recipient: 'user@speed.app',
-        fromTokenAmount: 900n
+        toTokenAmount: 900n
       })
 
       expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith({
@@ -470,6 +470,27 @@ describe('@satora/wdk-protocol-swidge-satora', () => {
         protocol.swidge({ fromToken: '42161:0xusdt0', toToken: 'Lightning:btc', recipient: 'user@speed.app' })
       ).rejects.toThrow(SatoraInvalidOptionsError)
       expect(mockClient.createEvmToLightningSwapGeneric).not.toHaveBeenCalled()
+    })
+
+    test('a lightning address payout uses the destination sats (toTokenAmount), not the source token amount', async () => {
+      // fromTokenAmount is the EVM source (1 USDT0 = 1_000_000 in 6 decimals);
+      // the Lightning payout is the destination amount in sats. Paying to a
+      // lightning address should charge 1500 sats, NOT 1_000_000 sats (~0.01 BTC).
+      await protocol.swidge({
+        fromToken: '42161:0xusdt0',
+        toToken: 'Lightning:btc',
+        recipient: 'user@speed.app',
+        fromTokenAmount: 1000000n,
+        toTokenAmount: 1500n
+      })
+
+      expect(mockClient.createEvmToLightningSwapGeneric).toHaveBeenCalledWith({
+        evmChainId: 42161,
+        tokenAddress: '0xusdt0',
+        userAddress: '0xEvmSigner',
+        lightningAddress: 'user@speed.app',
+        amountSats: 1500
+      })
     })
   })
 
