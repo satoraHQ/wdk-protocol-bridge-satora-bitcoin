@@ -754,8 +754,9 @@ function requireFromAmount (options, direction) {
 /**
  * Resolves a Lightning destination from `options.recipient` into the shape the
  * SDK expects: a BOLT11 invoice (amount carried by the invoice), a lightning
- * address, or an LNURL (the latter two require an amount in sats from
- * `fromTokenAmount`).
+ * address, or an LNURL. The latter two carry no amount, so the payout comes
+ * from the destination amount `toTokenAmount` (in sats) — never from
+ * `fromTokenAmount`, which is the source token amount for the swap.
  *
  * @param {string} recipient - The BOLT11 invoice, lightning address, or LNURL.
  * @param {SwidgeOptions} options - The swidge options.
@@ -766,12 +767,12 @@ function lightningDestination (recipient, options) {
     return { lightningInvoice: recipient }
   }
 
-  if (options.fromTokenAmount === undefined || options.fromTokenAmount === null) {
+  if (options.toTokenAmount === undefined || options.toTokenAmount === null) {
     throw new SatoraInvalidOptionsError(
-      'a lightning address / LNURL destination requires an amount in sats (fromTokenAmount)'
+      'a lightning address / LNURL destination requires the payout amount in sats (toTokenAmount)'
     )
   }
-  const amountSats = Number(options.fromTokenAmount)
+  const amountSats = Number(options.toTokenAmount)
 
   if (/^lnurl/i.test(recipient)) return { lnurl: recipient, amountSats }
   return { lightningAddress: recipient, amountSats }
